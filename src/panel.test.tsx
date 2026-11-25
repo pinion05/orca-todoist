@@ -311,7 +311,7 @@ test('adds a task to the Inbox', async () => {
     async (view) => {
       await view.type({ label: 'Add a task' }, 'New task')
       await view.press({ label: 'Add' })
-      assert.deepEqual(created, { content: 'New task', projectId: 'inbox' })
+      assert.deepEqual(created, { content: 'New task', projectId: 'inbox', dueDate: null })
       assert.ok(view.find({ text: 'New task' }))
       nothingWentWrong(view)
     }

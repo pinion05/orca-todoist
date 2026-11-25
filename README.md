@@ -17,8 +17,8 @@ There is one surface: the **Todoist** panel. No editor tab, no `+` menu entry.
 - **Filters** — project, label, priority, date, "hide subtasks" and a search box that
   understands `@label`, `#project` and `p1`…`p4` as well as plain words. The chosen view and
   filters are remembered while the plugin stays enabled.
-- **Add** — the field above the views adds a task; it goes to the project selected in the
-  filters, or to the Inbox.
+- **Add** — the field above the views adds a task with an optional due date; it goes to the
+  project selected in the filters, or to the Inbox.
 - **Edit** — title, description, project, section, due date and time, priority, labels and
   deadline. Changing the project or section moves the task.
 - **Complete** — the circle beside a task, or Complete in the editor. A completed task offers

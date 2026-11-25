@@ -101,8 +101,9 @@ const form = atom<TaskDraft | null>(null)
 const formError = atom<string | null>(null)
 /** A delete has been asked once; the next press deletes. */
 const deleteArmed = atom(false)
-/** The quick-add text. */
+/** The quick-add text and optional due date. */
 const creating = atom('')
+const createDate = atom('')
 /** A new project's name. */
 const newProject = atom('')
 /** A project creation is running. */
@@ -256,7 +257,12 @@ async function addTask(): Promise<void> {
   const target = read(project) === 'all' ? inbox?.id ?? null : read(project)
   set(busy, true)
   try {
-    const result = await plugin.request('task.create', { content, projectId: target })
+    const dueDate = read(createDate).trim()
+    const result = await plugin.request('task.create', {
+      content,
+      projectId: target,
+      dueDate: dueDate === '' ? null : dueDate
+    })
     set(view, result.view)
     if (!result.ok) {
       set(failure, { title: words().writeFailed, message: errorText(result.error, words()), retry: false })
@@ -264,6 +270,7 @@ async function addTask(): Promise<void> {
     }
     set(failure, null)
     set(creating, '')
+    set(createDate, '')
     showNotice(words().savedToast)
   } catch (error) {
     set(failure, { title: words().writeFailed, message: describe(error), retry: false })
@@ -606,6 +613,18 @@ function Body({ current, m }: { current: TodoistView; m: Messages }) {
             value={read(creating)}
             disabled={read(busy)}
             onChange={(value) => set(creating, value)}
+            onSubmit={() => void addTask()}
+          />
+        </Box>
+        <Box width={104}>
+          <Input
+            label={m.detailDue}
+            labelHidden
+            placeholder="YYYY-MM-DD"
+            maxLength={10}
+            value={read(createDate)}
+            disabled={read(busy)}
+            onChange={(value) => set(createDate, value)}
             onSubmit={() => void addTask()}
           />
         </Box>

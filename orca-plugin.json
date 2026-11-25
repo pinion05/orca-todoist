@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "todoist-viewer",
   "name": "Todoist",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Todoist in Orca's sidebar: add, edit, complete and filter tasks in list, calendar and board views.",
   "author": {
     "name": "pinion05"
