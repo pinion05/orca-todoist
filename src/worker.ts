@@ -2,7 +2,6 @@
 // is the only thing that reads Todoist. It keeps the last good answer in the plugin's storage, so
 // reopening a page draws at once and a failed read still has something to show.
 
-import { createHash } from 'node:crypto'
 import type { JsonValue, OrcaWorkerApi } from 'orca/worker'
 import type {
   TokenProtection,
@@ -35,6 +34,14 @@ type Config = {
   refreshMinutes: number
 }
 
+let stop: (() => void) | null = null
+
+/** Aborts the read in flight; Orca awaits it before the worker stops. */
+export function deactivate(): void {
+  stop?.()
+  stop = null
+}
+
 function nonEmpty(value: string | null | undefined): string | null {
   if (typeof value !== 'string') {
     return null
@@ -43,12 +50,22 @@ function nonEmpty(value: string | null | undefined): string | null {
   return trimmed === '' ? null : trimmed
 }
 
+/** FNV-1a over the token; only names a cache entry, never the token itself. */
+function fingerprint(value: string): string {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0')
+}
+
 /** How a token is named in storage: its shape, not the token itself. */
 function identityOf(source: TokenSource, value: string | null): string {
   if (value === null) {
     return 'none:'
   }
-  return `${source}:${createHash('sha256').update(value).digest('hex').slice(0, 16)}`
+  return `${source}:${fingerprint(value)}`
 }
 
 function describe(error: unknown): string {
@@ -205,7 +222,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const task = (async () => {
       try {
         const snapshot = await fetchSnapshot({ token, signal: controller.signal })
-        if (controller.signal.aborted) {
+        if (live.stopped || controller.signal.aborted) {
           return
         }
         live.snapshot = snapshot
@@ -231,8 +248,17 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
   }
 
+  /** One configuration pass at a time: a startup read and a panel request must not race. */
+  let preparing: Promise<unknown> = Promise.resolve()
+
+  const prepare = (force: boolean, signal?: AbortSignal): Promise<void> => {
+    const run = preparing.then(() => doPrepare(force, signal))
+    preparing = run.catch(() => undefined)
+    return run
+  }
+
   /** Reads the configuration, drops another account's cache, and reads Todoist when due. */
-  const prepare = async (force: boolean, signal?: AbortSignal): Promise<void> => {
+  const doPrepare = async (force: boolean, signal?: AbortSignal): Promise<void> => {
     const config = await readConfig()
     const identity = identityOf(config.token.source, config.value)
     live.token = config.token
@@ -303,6 +329,11 @@ export default function activate(orca: OrcaWorkerApi): void {
     publish()
     return view()
   })
+
+  stop = () => {
+    live.stopped = true
+    live.request?.abort()
+  }
 
   // A cached answer is drawn before the first network round trip; the read follows it.
   void prepare(false).catch((error) => {

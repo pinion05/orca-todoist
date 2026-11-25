@@ -27,6 +27,7 @@ export type Messages = {
   search: string
   searchPlaceholder: string
   filters: string
+  dateBuckets: string
   clearFilters: string
   activeFilters: string
   noTasks: string
@@ -102,6 +103,7 @@ const en: Messages = {
   search: 'Search',
   searchPlaceholder: 'Search tasks · @label · #project · p1',
   filters: 'Filters',
+  dateBuckets: 'Due dates',
   clearFilters: 'Clear',
   activeFilters: 'Active filters',
   noTasks: 'No active tasks',
@@ -203,6 +205,7 @@ const ko: Messages = {
   search: '검색',
   searchPlaceholder: '할 일 검색 · @라벨 · #프로젝트 · p1',
   filters: '필터',
+  dateBuckets: '날짜',
   clearFilters: '지우기',
   activeFilters: '적용된 필터',
   noTasks: '진행 중인 할 일이 없습니다',

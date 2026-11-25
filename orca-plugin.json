@@ -29,7 +29,9 @@
       {
         "id": "board",
         "title": "Todoist",
-        "extensions": [".todoist"],
+        "extensions": [
+          ".todoist"
+        ],
         "entry": "src/page.html"
       }
     ],
@@ -64,12 +66,39 @@
         "title": "Week starts on",
         "description": "First day of the calendar grid.",
         "type": "string",
-        "enum": ["monday", "sunday"],
-        "enumLabels": ["Monday", "Sunday"],
+        "enum": [
+          "monday",
+          "sunday"
+        ],
+        "enumLabels": [
+          "Monday",
+          "Sunday"
+        ],
         "default": "monday"
       }
     ]
   },
+  "cover": {
+    "path": "docs/cover.png",
+    "alt": "The Todoist Viewer page in Orca: a Korean list of tasks grouped by date, with projects, labels and a task detail panel"
+  },
+  "screenshots": [
+    {
+      "path": "docs/calendar.png",
+      "alt": "The calendar view: a six-week month grid with task chips on their due days and a day list",
+      "caption": "Calendar"
+    },
+    {
+      "path": "docs/board.png",
+      "alt": "The board view: one column per project with task cards",
+      "caption": "Board"
+    },
+    {
+      "path": "docs/dark.png",
+      "alt": "The same list in Orca’s dark theme",
+      "caption": "Dark theme"
+    }
+  ],
   "capabilities": [
     {
       "kind": "settings:own"
