@@ -1,0 +1,84 @@
+{
+  "manifestVersion": 2,
+  "id": "todoist-viewer",
+  "name": "Todoist Viewer",
+  "version": "0.1.0",
+  "description": "Read-only Todoist boards: a compact panel for today, and a full page with list, calendar, board and filters.",
+  "author": {
+    "name": "pinion05"
+  },
+  "repository": "https://github.com/pinion05/orca-todoist",
+  "license": "MIT",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "today",
+        "title": "Todoist",
+        "icon": "check",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "customEditors": [
+      {
+        "id": "board",
+        "title": "Todoist",
+        "extensions": [".todoist"],
+        "entry": "src/page.html"
+      }
+    ],
+    "newFiles": [
+      {
+        "id": "view",
+        "title": "New Todoist view",
+        "extension": ".todoist",
+        "template": "templates/new-view.todoist"
+      }
+    ],
+    "settings": [
+      {
+        "key": "apiToken",
+        "title": "API token (fallback)",
+        "description": "Only used when no token is saved encrypted. Saved as plain text; paste a token from Todoist → Settings → Integrations.",
+        "type": "string",
+        "default": "",
+        "placeholder": "Only without an OS key store"
+      },
+      {
+        "key": "refreshMinutes",
+        "title": "Refresh every",
+        "description": "Minutes between reads of your Todoist tasks while a panel or page is open.",
+        "type": "integer",
+        "default": 5,
+        "minimum": 1,
+        "maximum": 60
+      },
+      {
+        "key": "weekStartsOn",
+        "title": "Week starts on",
+        "description": "First day of the calendar grid.",
+        "type": "string",
+        "enum": ["monday", "sunday"],
+        "enumLabels": ["Monday", "Sunday"],
+        "default": "monday"
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "settings:own"
+    },
+    {
+      "kind": "secrets:own"
+    },
+    {
+      "kind": "storage:own"
+    }
+  ]
+}
