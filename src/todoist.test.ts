@@ -4,7 +4,20 @@
 import { afterEach, assert, test } from 'orca/testing'
 import type { TodoistSnapshot } from './protocol'
 import { NOW, TOKEN } from './fixtures'
-import { RequestError, fetchSnapshot, isDue, refreshMinutesOf } from './todoist'
+import {
+  RequestError,
+  closeTask,
+  clearDueOnTask,
+  createProject,
+  createTask,
+  deleteTask,
+  fetchSnapshot,
+  isDue,
+  moveTask,
+  refreshMinutesOf,
+  reopenTask,
+  updateTask
+} from './todoist'
 
 const realFetch = globalThis.fetch
 
@@ -45,7 +58,8 @@ function stubFetch(
     const reply = answer(url, endpointOf(url))
     const status = reply.status ?? 200
     const text = reply.text ?? JSON.stringify(reply.body ?? null)
-    return new Response(text, { status, headers: reply.headers })
+    const body = status === 204 || status === 205 || status === 304 ? null : text
+    return new Response(body, { status, headers: reply.headers })
   }) as typeof fetch
   return record
 }
@@ -412,4 +426,160 @@ test('isDue is true with no attempt, false when fresh, and flips at the boundary
   assert.equal(isDue(NOW - 60_000, 5, NOW), false)
   assert.equal(isDue(NOW - 5 * 60_000 - 1, 5, NOW), true)
   assert.equal(isDue(NOW - 5 * 60_000, 5, NOW), true)
+})
+
+// --- writes ----------------------------------------------------------------------------------
+
+test('creates a task with the fields a surface sends', async () => {
+  const record = stubFetch(() => ({ body: { id: 't9' } }))
+  await createTask({
+    token: TOKEN,
+    input: {
+      content: '  Write the release notes  ',
+      description: 'Cover 0.2.0',
+      projectId: 'p1',
+      sectionId: 's1',
+      dueDate: '2026-06-01',
+      priority: 9,
+      labels: ['next', ' next ', 'writing'],
+      deadline: '2026-06-03'
+    }
+  })
+  assert.equal(record.urls[0], 'https://api.todoist.com/api/v1/tasks')
+  assert.equal(record.inits[0]?.method, 'POST')
+  assert.equal(
+    new Headers(record.inits[0]?.headers).get('authorization'),
+    `Bearer ${TOKEN}`
+  )
+  assert.deepEqual(JSON.parse(String(record.inits[0]?.body)), {
+    content: 'Write the release notes',
+    priority: 4,
+    description: 'Cover 0.2.0',
+    project_id: 'p1',
+    section_id: 's1',
+    labels: ['next', 'writing'],
+    due_date: '2026-06-01',
+    deadline_date: '2026-06-03'
+  })
+})
+
+test('creates a timed task, and leaves a date-less one undated', async () => {
+  const timed = stubFetch(() => ({ body: {} }))
+  await createTask({
+    token: TOKEN,
+    input: { content: 'Standup', dueDate: '2026-06-01', dueTime: '09:30' }
+  })
+  assert.equal(
+    JSON.parse(String(timed.inits[0]?.body)).due_datetime,
+    '2026-06-01T09:30:00'
+  )
+
+  const undated = stubFetch(() => ({ body: {} }))
+  await createTask({ token: TOKEN, input: { content: 'Someday' } })
+  assert.equal(JSON.parse(String(undated.inits[0]?.body)).due_date, undefined)
+  assert.equal(JSON.parse(String(undated.inits[0]?.body)).due_datetime, undefined)
+})
+
+test('updates a task, clearing a due date and deadline when asked', async () => {
+  const record = stubFetch(() => ({ body: {} }))
+  await updateTask({
+    token: TOKEN,
+    input: {
+      id: 't1',
+      content: 'Renamed',
+      description: '',
+      projectId: 'p1',
+      sectionId: null,
+      dueDate: null,
+      dueTime: null,
+      priority: 2,
+      labels: [],
+      deadline: null
+    }
+  })
+  assert.equal(record.urls[0], 'https://api.todoist.com/api/v1/tasks/t1')
+  assert.equal(record.inits[0]?.method, 'POST')
+  const body = JSON.parse(String(record.inits[0]?.body))
+  assert.equal(body.content, 'Renamed')
+  assert.equal(body.due_string, undefined)
+  assert.equal(body.due_date, undefined)
+  assert.equal(body.due_datetime, undefined)
+  assert.equal(body.deadline_date, null)
+  assert.deepEqual(body.labels, [])
+})
+
+test('moves, closes, reopens and deletes a task', async () => {
+  const record = stubFetch(() => ({ status: 204, text: '' }))
+  await moveTask({ token: TOKEN, id: 't1', projectId: 'p2', sectionId: 's2' })
+  await closeTask({ token: TOKEN, id: 't1' })
+  await reopenTask({ token: TOKEN, id: 't1' })
+  await deleteTask({ token: TOKEN, id: 't1' })
+  assert.deepEqual(
+    record.urls.map((url) => new URL(url).pathname),
+    [
+      '/api/v1/tasks/t1/move',
+      '/api/v1/tasks/t1/close',
+      '/api/v1/tasks/t1/reopen',
+      '/api/v1/tasks/t1'
+    ]
+  )
+  assert.deepEqual(
+    record.inits.map((init) => init?.method),
+    ['POST', 'POST', 'POST', 'DELETE']
+  )
+  assert.deepEqual(JSON.parse(String(record.inits[0]?.body)), {
+    project_id: 'p2',
+    section_id: 's2'
+  })
+})
+
+test('clears a due date through the Sync API', async () => {
+  const record = stubFetch(() => ({ body: { sync_status: {} } }))
+  await clearDueOnTask({ token: TOKEN, id: 't1' }).catch(() => undefined)
+  assert.equal(record.urls[0], 'https://api.todoist.com/api/v1/sync')
+  assert.equal(record.inits[0]?.method, 'POST')
+  assert.equal(
+    new Headers(record.inits[0]?.headers).get('content-type'),
+    'application/x-www-form-urlencoded'
+  )
+  const form = new URLSearchParams(String(record.inits[0]?.body))
+  assert.equal(form.get('sync_token'), '*')
+  const command = JSON.parse(String(form.get('commands')))[0]
+  assert.equal(command.type, 'item_update')
+  assert.deepEqual(command.args, { id: 't1', due: null })
+})
+
+test('creates a project and maps a refused write to http', async () => {
+  const created = stubFetch(() => ({ body: { id: 'p9' } }))
+  await createProject({ token: TOKEN, input: { name: '  Home  ' } })
+  assert.equal(created.urls[0], 'https://api.todoist.com/api/v1/projects')
+  assert.deepEqual(JSON.parse(String(created.inits[0]?.body)), {
+    name: 'Home',
+    color: 'charcoal'
+  })
+
+  stubFetch(() => ({ status: 400, body: { error: 'Invalid due date' } }))
+  await updateTask({
+    token: TOKEN,
+    input: {
+      id: 't1',
+      content: 'x',
+      description: '',
+      projectId: 'p1',
+      sectionId: null,
+      dueDate: 'not-a-date',
+      dueTime: null,
+      priority: 1,
+      labels: [],
+      deadline: null
+    }
+  }).then(
+    () => {
+      throw new Error('a refused write must reject')
+    },
+    (error: unknown) => {
+      assert.equal(codeOf(error), 'http')
+      assert.match(String((error as RequestError).detail), /Invalid due date/)
+    }
+  )
 })

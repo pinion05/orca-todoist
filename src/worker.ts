@@ -4,15 +4,32 @@
 
 import type { JsonValue, OrcaWorkerApi } from 'orca/worker'
 import type {
+  ProjectCreateInput,
+  TaskCreateInput,
+  TaskUpdateInput,
   TokenProtection,
   TokenSource,
   TokenStatus,
   TodoistError,
+  TodoistMutation,
   TodoistSnapshot,
   TodoistState,
   TodoistView
 } from './protocol'
-import { RequestError, fetchSnapshot, isDue, refreshMinutesOf } from './todoist'
+import {
+  RequestError,
+  clearDueOnTask,
+  closeTask,
+  createProject,
+  createTask,
+  deleteTask,
+  fetchSnapshot,
+  isDue,
+  moveTask,
+  refreshMinutesOf,
+  reopenTask,
+  updateTask
+} from './todoist'
 
 /** Where the page and the panel save the token, in the plugin's encrypted secrets. */
 const SECRET = 'todoistToken'
@@ -281,6 +298,60 @@ export default function activate(orca: OrcaWorkerApi): void {
     publish()
   }
 
+  /** One write at a time, so two quick edits cannot interleave their refreshes. */
+  let mutating: Promise<unknown> = Promise.resolve()
+
+  /** Runs a write, then reads the account again. The write's result is the surface's answer. */
+  const mutate = (
+    run: (token: string, signal: AbortSignal | undefined) => Promise<void>,
+    signal?: AbortSignal
+  ): Promise<TodoistMutation> => {
+    const task = mutating.then(async (): Promise<TodoistMutation> => {
+      // A surface can write before its first read finished; load the snapshot first so a
+      // project change can be told from a no-op, and so a failure still leaves data to draw.
+      await prepare(false)
+      const config = await readConfig()
+      live.token = config.token
+      live.refreshMinutes = config.refreshMinutes
+      if (config.value === null) {
+        return {
+          ok: false,
+          error: {
+            code: 'bad_token',
+            httpStatus: null,
+            detail: 'Connect Todoist first.',
+            retryAfterMs: null
+          },
+          view: view()
+        }
+      }
+      const identity = identityOf(config.token.source, config.value)
+      try {
+        await run(config.value, signal)
+      } catch (error) {
+        return { ok: false, error: toFailure(error), view: view() }
+      }
+      // The write stands even when the read after it fails; the next surface read retries.
+      try {
+        const snapshot = await fetchSnapshot({ token: config.value, signal })
+        live.snapshot = snapshot
+        live.failure = null
+        live.lastAttemptAt = snapshot.fetchedAt
+        live.identity = identity
+        await saveCache(identity, snapshot)
+      } catch (error) {
+        orca.log(`refresh after write: ${describe(error)}`)
+        live.lastAttemptAt = 0
+      }
+      publish()
+      return { ok: true, view: view() }
+    })
+    mutating = task.catch(() => undefined)
+    return task
+  }
+
+  const taskOfSnapshot = (id: string) => live.snapshot?.tasks.find((task) => task.id === id)
+
   orca.panels.handle('todoist.get', async (_input, context) => {
     await prepare(false, context.signal)
     return view()
@@ -329,6 +400,59 @@ export default function activate(orca: OrcaWorkerApi): void {
     publish()
     return view()
   })
+
+  orca.panels.handle('task.create', (input, context) =>
+    mutate(
+      (token, signal) => createTask({ token, signal, input: input as TaskCreateInput }),
+      context.signal
+    )
+  )
+
+  orca.panels.handle('task.update', (input, context) =>
+    mutate(async (token, signal) => {
+      await updateTask({ token, signal, input: input as TaskUpdateInput })
+      const current = taskOfSnapshot(input.id)
+      if (
+        current !== undefined &&
+        current.due !== null &&
+        (input.dueDate === null || input.dueDate === '')
+      ) {
+        await clearDueOnTask({ token, signal, id: input.id })
+      }
+      const moved =
+        current !== undefined &&
+        (current.projectId !== input.projectId ||
+          (current.sectionId ?? null) !== (input.sectionId ?? null))
+      if (moved && input.projectId !== '') {
+        await moveTask({
+          token,
+          signal,
+          id: input.id,
+          projectId: input.projectId,
+          sectionId: input.sectionId
+        })
+      }
+    }, context.signal)
+  )
+
+  orca.panels.handle('task.close', (input, context) =>
+    mutate((token, signal) => closeTask({ token, signal, id: input.id }), context.signal)
+  )
+
+  orca.panels.handle('task.reopen', (input, context) =>
+    mutate((token, signal) => reopenTask({ token, signal, id: input.id }), context.signal)
+  )
+
+  orca.panels.handle('task.delete', (input, context) =>
+    mutate((token, signal) => deleteTask({ token, signal, id: input.id }), context.signal)
+  )
+
+  orca.panels.handle('project.create', (input, context) =>
+    mutate(
+      (token, signal) => createProject({ token, signal, input: input as ProjectCreateInput }),
+      context.signal
+    )
+  )
 
   stop = () => {
     live.stopped = true

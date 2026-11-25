@@ -11,7 +11,7 @@ const NOW = 1_780_000_000_000
 const TOKEN = 'tok-test-1234'
 
 type Answer = Response | Promise<Response>
-type Call = { url: string; headers: Headers }
+type Call = { url: string; headers: Headers; method: string; body: string | null }
 
 const json = (body: unknown, status = 200): Response =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -74,7 +74,7 @@ const snapshotOf = (view: TodoistView): TodoistSnapshot | null =>
       : null
 
 async function withWorker(
-  options: { host?: MockHost; answer?: (url: string) => Answer },
+  options: { host?: MockHost; answer?: (url: string, init?: RequestInit) => Answer },
   run: (worker: TestWorker, calls: Call[]) => Promise<void>
 ): Promise<void> {
   const env = environment()
@@ -84,8 +84,13 @@ async function withWorker(
   const real = globalThis.fetch
   const calls: Call[] = []
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({ url: String(input), headers: new Headers(init?.headers) })
-    return answer(String(input))
+    calls.push({
+      url: String(input),
+      headers: new Headers(init?.headers),
+      method: init?.method ?? 'GET',
+      body: typeof init?.body === 'string' ? init.body : null
+    })
+    return answer(String(input), init)
   }) as typeof fetch
   let worker: TestWorker | null = null
   try {
@@ -281,4 +286,188 @@ test('posts every change to the open surfaces, once', async () => {
 test('masks short and long tokens without revealing them', () => {
   assert.equal(mask('abcd'), '••••')
   assert.equal(mask('abcdefgh'), '••••efgh')
+})
+
+
+// --- writes ----------------------------------------------------------------------------------
+
+const noContent = (): Response => new Response(null, { status: 204 })
+
+test('creates a task and reads the account again', async () => {
+  let created = false
+  await withWorker(
+    {
+      host: hostWith(TOKEN),
+      answer: (url, init) => {
+        if (init?.method === 'POST') {
+          created = true
+          return json({ id: 't2' }, 201)
+        }
+        if (url.includes('/api/v1/tasks')) {
+          return json(page(created ? [task('t1'), task('t2')] : [task('t1')]))
+        }
+        return json(answerFor(url))
+      }
+    },
+    async (worker, calls) => {
+      const result = await worker.request('task.create', {
+        content: 'New task',
+        projectId: 'p1',
+        dueDate: '2026-06-01',
+        priority: 3
+      })
+      assert.equal(result.ok, true)
+      if (result.ok) {
+        assert.equal(snapshotOf(result.view)?.tasks.length, 2)
+      }
+      const post = calls.find((call) => call.method === 'POST')
+      assert.equal(post?.url, 'https://api.todoist.com/api/v1/tasks')
+      assert.deepEqual(JSON.parse(post?.body ?? '{}'), {
+        content: 'New task',
+        priority: 3,
+        project_id: 'p1',
+        due_date: '2026-06-01'
+      })
+    }
+  )
+})
+
+test('moves a task when its project changed', async () => {
+  await withWorker(
+    {
+      host: hostWith(TOKEN),
+      answer: (_url, init) => (init?.method === 'POST' ? noContent() : json(answerFor(_url)))
+    },
+    async (worker, calls) => {
+      const result = await worker.request('task.update', {
+        id: 't1',
+        content: 'Moved',
+        description: '',
+        projectId: 'p2',
+        sectionId: null,
+        dueDate: '2026-05-28',
+        dueTime: null,
+        priority: 1,
+        labels: [],
+        deadline: null
+      })
+      assert.equal(result.ok, true)
+      const writes = calls.filter((call) => call.method !== 'GET')
+      assert.deepEqual(
+        writes.map((call) => new URL(call.url).pathname),
+        ['/api/v1/tasks/t1', '/api/v1/tasks/t1/move']
+      )
+    }
+  )
+})
+
+test('clears a due date with the Sync API when the form empties it', async () => {
+  await withWorker(
+    {
+      host: hostWith(TOKEN),
+      answer: (url, init) => {
+        if (url.endsWith('/sync')) {
+          const form = new URLSearchParams(String(init?.body))
+          const command = JSON.parse(String(form.get('commands')))[0]
+          return json({ sync_status: { [command.uuid]: 'ok' } })
+        }
+        if (init?.method === 'POST') {
+          return noContent()
+        }
+        return json(answerFor(url))
+      }
+    },
+    async (worker, calls) => {
+      const result = await worker.request('task.update', {
+        id: 't1',
+        content: 'No due',
+        description: '',
+        projectId: 'p1',
+        sectionId: null,
+        dueDate: null,
+        dueTime: null,
+        priority: 1,
+        labels: [],
+        deadline: null
+      })
+      assert.equal(result.ok, true)
+      assert.ok(calls.some((call) => new URL(call.url).pathname === '/api/v1/sync'))
+    }
+  )
+})
+
+test('closes a task and reads it out of the account', async () => {
+  let closed = false
+  await withWorker(
+    {
+      host: hostWith(TOKEN),
+      answer: (url, init) => {
+        if (init?.method === 'POST' && url.includes('/close')) {
+          closed = true
+          return noContent()
+        }
+        if (init?.method === 'POST') {
+          return noContent()
+        }
+        if (url.includes('/api/v1/tasks')) {
+          return json(page(closed ? [] : [task('t1')]))
+        }
+        return json(answerFor(url))
+      }
+    },
+    async (worker) => {
+      const result = await worker.request('task.close', { id: 't1' })
+      assert.equal(result.ok, true)
+      if (result.ok) {
+        assert.equal(snapshotOf(result.view)?.tasks.length, 0)
+      }
+    }
+  )
+})
+
+test('reports a refused write and keeps the last good view', async () => {
+  await withWorker(
+    {
+      host: hostWith(TOKEN),
+      answer: (url, init) =>
+        init?.method === 'POST' ? json({ error: 'bad due date' }, 400) : json(answerFor(url))
+    },
+    async (worker) => {
+      const result = await worker.request('task.create', { content: 'No date' })
+      assert.equal(result.ok, false)
+      if (!result.ok) {
+        assert.equal(result.error.code, 'http')
+        assert.equal(result.error.httpStatus, 400)
+        assert.equal(snapshotOf(result.view)?.tasks.length, 1)
+      }
+    }
+  )
+})
+
+test('refuses a write without a token', async () => {
+  await withWorker({}, async (worker) => {
+    const result = await worker.request('task.create', { content: 'No token' })
+    assert.equal(result.ok, false)
+    if (!result.ok) {
+      assert.equal(result.error.code, 'bad_token')
+    }
+  })
+})
+
+test('creates a project', async () => {
+  await withWorker(
+    {
+      host: hostWith(TOKEN),
+      answer: (url, init) =>
+        init?.method === 'POST' && url.includes('/projects')
+          ? json({ id: 'p9' })
+          : json(answerFor(url))
+    },
+    async (worker, calls) => {
+      const result = await worker.request('project.create', { name: 'Home' })
+      assert.equal(result.ok, true)
+      const post = calls.find((call) => call.method === 'POST')
+      assert.deepEqual(JSON.parse(post?.body ?? '{}'), { name: 'Home', color: 'charcoal' })
+    }
+  )
 })

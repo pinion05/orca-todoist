@@ -37,6 +37,8 @@ import {
 } from './page-state'
 import type { EditorSession } from 'orca/frame'
 import type {
+  TaskCreateInput,
+  TaskUpdateInput,
   TodoistError,
   TodoistErrorCode,
   TodoistProject,
@@ -131,13 +133,20 @@ type Ui = {
   sort: HTMLSelectElement
   filterToggle: HTMLButtonElement
   refresh: HTMLButtonElement
-  readonlyBadge: HTMLSpanElement
   banner: HTMLDivElement
+  compose: HTMLDivElement
+  composeInput: HTMLInputElement
+  composeProject: HTMLSelectElement
+  composeDate: HTMLInputElement
+  composePriority: HTMLSelectElement
+  composeButton: HTMLButtonElement
+  composeError: HTMLSpanElement
   rail: HTMLElement
   main: HTMLElement
   detail: HTMLElement
   foot: HTMLElement
   setup: HTMLDivElement
+  toast: HTMLDivElement
 }
 
 type PageData = {
@@ -165,6 +174,16 @@ let railOpen = false
 let detailOpen = false
 let weekStartsOn: 0 | 1 = 1
 let searchTimer: number | null = null
+let composing = false
+let composeError: string | null = null
+let composeProjectId: string | null = null
+let composeProjectKey = ''
+let creatingProject = false
+let editingTaskId: string | null = null
+let deleteArmed = false
+let projectDraft = ''
+const closing = new Set<string>()
+let toastTimer: number | null = null
 
 // --- persistence ----------------------------------------------------------------------------
 
@@ -443,6 +462,179 @@ async function forgetToken(): Promise<void> {
   }
 }
 
+// --- writes ---------------------------------------------------------------------------------
+
+function errorText(error: TodoistError): string {
+  const words = m.errors[error.code](error)
+  return error.detail === null || error.detail === '' ? words : `${words} ${error.detail}`
+}
+
+/** Shows a short status below the page, with an optional action such as Undo. */
+function showToast(message: string, action?: { label: string; run: () => void }): void {
+  if (ui === null) {
+    return
+  }
+  if (toastTimer !== null) {
+    window.clearTimeout(toastTimer)
+  }
+  const box = ui.toast
+  box.replaceChildren(h('span', { class: 'tv-toast-text', text: message }))
+  if (action !== undefined) {
+    box.append(
+      button(
+        action.label,
+        () => {
+          box.hidden = true
+          action.run()
+        },
+        'tv-link'
+      )
+    )
+  }
+  box.hidden = false
+  toastTimer = window.setTimeout(() => {
+    box.hidden = true
+    toastTimer = null
+  }, 8000)
+}
+
+/** Keeps the composer's project picker in step with the account without losing a choice. */
+function renderComposer(): void {
+  if (ui === null) {
+    return
+  }
+  ui.compose.hidden = setupOpen()
+  if (ui.compose.hidden) {
+    return
+  }
+  const projects = [...(snapshotOf()?.projects ?? [])].sort((left, right) => left.order - right.order)
+  const key = projects.map((project) => `${project.id}:${project.name}:${project.order}`).join('|')
+  if (key !== composeProjectKey) {
+    composeProjectKey = key
+    const picker = ui.composeProject
+    picker.replaceChildren()
+    for (const project of projects) {
+      picker.append(h('option', { attrs: { value: project.id }, text: project.name }))
+    }
+    const inbox = projects.find((project) => project.isInboxProject) ?? projects[0]
+    if (!projects.some((project) => project.id === composeProjectId)) {
+      composeProjectId = inbox?.id ?? null
+    }
+    picker.value = composeProjectId ?? ''
+  }
+  ui.composeButton.disabled = composing || ui.composeInput.value.trim() === ''
+  ui.composeError.textContent = composeError ?? ''
+  ui.composeError.hidden = composeError === null
+}
+
+async function createFromComposer(): Promise<void> {
+  if (ui === null) {
+    return
+  }
+  const content = ui.composeInput.value.trim()
+  if (content === '' || composing) {
+    return
+  }
+  composing = true
+  composeError = null
+  renderComposer()
+  const input: TaskCreateInput = {
+    content,
+    projectId: ui.composeProject.value === '' ? null : ui.composeProject.value,
+    dueDate: ui.composeDate.value === '' ? null : ui.composeDate.value,
+    priority: Number(ui.composePriority.value) || 1
+  }
+  try {
+    const result = await orca.plugin.request('task.create', input)
+    if (result.ok) {
+      current = result.view
+      ui.composeInput.value = ''
+      ui.composeDate.value = ''
+      showToast(m.savedToast)
+      render()
+      ui.composeInput.focus()
+      return
+    }
+    composeError = errorText(result.error)
+  } catch (error) {
+    composeError = messageOf(error)
+  } finally {
+    composing = false
+    renderComposer()
+  }
+}
+
+async function completeTask(id: string): Promise<void> {
+  if (closing.has(id)) {
+    return
+  }
+  const task = snapshotOf()?.tasks.find((candidate) => candidate.id === id) ?? null
+  closing.add(id)
+  try {
+    const result = await orca.plugin.request('task.close', { id })
+    if (!result.ok) {
+      showToast(errorText(result.error))
+      return
+    }
+    current = result.view
+    if (selectedTaskId === id) {
+      selectedTaskId = null
+      detailOpen = false
+      editingTaskId = null
+    }
+    showToast(task === null ? m.savedToast : m.completedToast(task.content), {
+      label: m.undo,
+      run: () => void reopenTask(id)
+    })
+  } catch (error) {
+    showToast(messageOf(error))
+  } finally {
+    closing.delete(id)
+    render()
+  }
+}
+
+async function reopenTask(id: string): Promise<void> {
+  try {
+    const result = await orca.plugin.request('task.reopen', { id })
+    if (result.ok) {
+      current = result.view
+      showToast(m.savedToast)
+      render()
+    } else {
+      showToast(errorText(result.error))
+    }
+  } catch (error) {
+    showToast(messageOf(error))
+  }
+}
+
+async function createProject(name: string): Promise<void> {
+  const value = name.trim()
+  if (value === '' || creatingProject) {
+    return
+  }
+  creatingProject = true
+  try {
+    const result = await orca.plugin.request('project.create', { name: value })
+    if (result.ok) {
+      current = result.view
+      projectDraft = ''
+      creatingProject = false
+      showToast(m.savedToast)
+    } else {
+      showToast(errorText(result.error))
+      creatingProject = true
+      projectDraft = value
+    }
+    render()
+  } catch (error) {
+    creatingProject = false
+    showToast(messageOf(error))
+    render()
+  }
+}
+
 // --- shell ----------------------------------------------------------------------------------
 
 function build(): Ui {
@@ -517,17 +709,8 @@ function build(): Ui {
     void load(true)
   })
 
-  const readonlyBadge = h('span', {
-    class: 'tv-badge',
-    text: m.readOnly
-  })
-  readonlyBadge.hidden = true
-
   const brand = h('div', { class: 'tv-brand' }, [
-    h('div', { class: 'tv-brand-row' }, [
-      h('h1', { class: 'tv-title', text: m.title }),
-      readonlyBadge
-    ]),
+    h('h1', { class: 'tv-title', text: m.title }),
     h('span', { class: 'tv-tagline', text: m.tagline })
   ])
 
@@ -554,6 +737,79 @@ function build(): Ui {
   const detail = h('aside', { class: 'tv-detail', attrs: { 'aria-label': m.detailTitle } })
   detail.hidden = true
 
+  const composeInput = h('input', {
+    class: 'tv-compose-input',
+    attrs: {
+      type: 'text',
+      placeholder: m.addTaskPlaceholder,
+      'aria-label': m.addTask,
+      autocomplete: 'off'
+    }
+  })
+  composeInput.addEventListener('input', () => {
+    if (ui !== null) {
+      ui.composeButton.disabled = composing || ui.composeInput.value.trim() === ''
+      if (composeError !== null) {
+        composeError = null
+        ui.composeError.hidden = true
+      }
+    }
+  })
+  composeInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      void createFromComposer()
+    }
+  })
+
+  const composeProject = h('select', {
+    class: 'tv-compose-project',
+    attrs: { 'aria-label': m.projects }
+  })
+  composeProject.addEventListener('change', () => {
+    composeProjectId = composeProject.value === '' ? null : composeProject.value
+  })
+
+  const composeDate = h('input', {
+    class: 'tv-compose-date',
+    attrs: { type: 'date', 'aria-label': m.detailDue }
+  })
+
+  const composePriority = h('select', {
+    class: 'tv-compose-priority',
+    attrs: { 'aria-label': m.detailPriority }
+  })
+  for (const priority of [4, 3, 2, 1]) {
+    composePriority.append(
+      h('option', { attrs: { value: String(priority) }, text: priorityName(priority) })
+    )
+  }
+  composePriority.value = '1'
+
+  const composeButton = button(
+    m.createTask,
+    () => void createFromComposer(),
+    'tv-btn tv-btn-primary'
+  )
+  composeButton.disabled = true
+  const composeErrorNode = h('span', {
+    class: 'tv-compose-error',
+    attrs: { role: 'alert' }
+  })
+  composeErrorNode.hidden = true
+
+  const compose = h('div', { class: 'tv-compose' }, [
+    composeInput,
+    composeProject,
+    composeDate,
+    composePriority,
+    composeButton,
+    composeErrorNode
+  ])
+
+  const toast = h('div', { class: 'tv-toast', attrs: { role: 'status', 'aria-live': 'polite' } })
+  toast.hidden = true
+
   const body = h('div', { class: 'tv-body' }, [rail, main, detail])
   const foot = h('footer', { class: 'tv-foot' })
   const setup = h('div', { class: 'tv-setup' })
@@ -561,9 +817,11 @@ function build(): Ui {
   const root = h('div', { class: 'tv', attrs: { 'data-view': state.view } }, [
     bar,
     banner,
+    compose,
     body,
     foot,
-    setup
+    setup,
+    toast
   ])
 
   return {
@@ -573,13 +831,20 @@ function build(): Ui {
     sort,
     filterToggle,
     refresh,
-    readonlyBadge,
     banner,
+    compose,
+    composeInput,
+    composeProject,
+    composeDate,
+    composePriority,
+    composeButton,
+    composeError: composeErrorNode,
     rail,
     main,
     detail,
     foot,
-    setup
+    setup,
+    toast
   }
 }
 
@@ -594,6 +859,7 @@ function render(): void {
   const caret = wasToken ? active.selectionStart : null
   renderHeader()
   renderBanner()
+  renderComposer()
   renderRail()
   renderMain()
   renderDetail()
@@ -630,7 +896,6 @@ function renderHeader(): void {
   ui.filterToggle.setAttribute('aria-expanded', String(railOpen))
   ui.filterToggle.classList.toggle('is-active', hasActiveFilters(state))
   ui.refresh.disabled = requesting
-  ui.readonlyBadge.hidden = false
 }
 
 function renderBanner(): void {
@@ -794,6 +1059,44 @@ function projectsSection(data: PageData): HTMLElement {
     )
     row.addEventListener('click', () => toggleProject(project.id))
     list.append(row)
+  }
+  if (creatingProject) {
+    const input = h('input', {
+      class: 'tv-input tv-project-input',
+      attrs: { type: 'text', placeholder: m.projectName, 'aria-label': m.projectName }
+    })
+    input.value = projectDraft
+    const create = button(m.createProject, () => void createProject(input.value), 'tv-btn tv-btn-primary')
+    create.disabled = projectDraft.trim() === ''
+    input.addEventListener('input', () => {
+      projectDraft = input.value
+      create.disabled = input.value.trim() === ''
+    })
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        void createProject(input.value)
+      }
+      if (event.key === 'Escape') {
+        creatingProject = false
+        projectDraft = ''
+        renderRail()
+      }
+    })
+    list.append(h('div', { class: 'tv-new-project' }, [input, create]))
+    queueMicrotask(() => input.focus())
+  } else {
+    list.append(
+      button(
+        m.newProject,
+        () => {
+          creatingProject = true
+          projectDraft = ''
+          renderRail()
+        },
+        'tv-btn tv-add-project'
+      )
+    )
   }
   return section(m.projects, [list])
 }
@@ -980,17 +1283,26 @@ function listView(data: PageData): HTMLElement {
   return wrap
 }
 
-function taskRow(task: TodoistTask, data: PageData): HTMLButtonElement {
+function taskRow(task: TodoistTask, data: PageData): HTMLElement {
   const project = data.projects.get(task.projectId)
   const subtasks = data.counts.get(task.id) ?? 0
-  const row = h('button', {
-    class: 'tv-row',
-    attrs: {
-      type: 'button',
-      'aria-selected': String(selectedTaskId === task.id && detailOpen)
-    }
+  const selected = selectedTaskId === task.id && detailOpen
+  const row = h('div', { class: 'tv-row', attrs: { 'data-selected': String(selected) } })
+
+  const check = h('button', {
+    class: 'tv-done',
+    attrs: { type: 'button', 'aria-label': m.complete, title: m.complete }
   })
-  row.append(
+  check.append(h('span', { class: 'tv-done-dot', attrs: { 'aria-hidden': 'true' } }))
+  check.disabled = closing.has(task.id)
+  check.addEventListener('click', (event) => {
+    event.stopPropagation()
+    void completeTask(task.id)
+  })
+
+  const main = h('button', { class: 'tv-row-main', attrs: { type: 'button' } })
+  main.setAttribute('aria-current', selected ? 'true' : 'false')
+  main.append(
     h('span', {
       class: 'tv-stripe',
       attrs: { 'aria-hidden': 'true' },
@@ -1008,13 +1320,14 @@ function taskRow(task: TodoistTask, data: PageData): HTMLButtonElement {
   if (subtasks > 0) {
     meta.append(h('span', { class: 'tv-subtasks', text: m.subtaskCount(subtasks) }))
   }
-  row.append(
+  main.append(
     h('div', { class: 'tv-row-body' }, [
       h('div', { class: 'tv-row-title', text: task.content }),
       meta
     ])
   )
-  row.addEventListener('click', () => selectTask(task.id))
+  main.addEventListener('click', () => selectTask(task.id))
+  row.append(check, main)
   return row
 }
 
@@ -1029,7 +1342,12 @@ function calendarView(data: PageData): HTMLElement {
       iconButton('›', m.nextMonth, () => apply({ month: addMonths(month, 1) })),
       button(
         m.calendarToday,
-        () => apply({ month: monthOf(data.todayKey), selectedDay: data.todayKey }),
+        () => {
+          if (ui !== null) {
+            ui.composeDate.value = data.todayKey
+          }
+          apply({ month: monthOf(data.todayKey), selectedDay: data.todayKey })
+        },
         'tv-btn'
       )
     ])
@@ -1087,7 +1405,12 @@ function calendarCell(
     node.append(h('span', { class: 'tv-more', text: m.moreTasks(tasks.length - 3) }))
   }
 
-  const activate = (): void => apply({ selectedDay: cell.key })
+  const activate = (): void => {
+    if (ui !== null) {
+      ui.composeDate.value = cell.key
+    }
+    apply({ selectedDay: cell.key })
+  }
   node.addEventListener('click', activate)
   node.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -1201,6 +1524,10 @@ function card(task: TodoistTask, data: PageData): HTMLButtonElement {
 }
 
 function selectTask(id: string): void {
+  if (id !== selectedTaskId) {
+    editingTaskId = null
+    deleteArmed = false
+  }
   selectedTaskId = id
   detailOpen = true
   render()
@@ -1211,6 +1538,15 @@ function renderDetail(): void {
     return
   }
   const box = ui.detail
+  if (!detailOpen) {
+    editingTaskId = null
+    deleteArmed = false
+    box.dataset.editing = ''
+  }
+  // A form being typed into is not rebuilt by a background read; it would lose the draft.
+  if (editingTaskId !== null && selectedTaskId === editingTaskId && box.dataset.editing === '1') {
+    return
+  }
   box.replaceChildren()
   const snapshot = snapshotOf()
   const task =
@@ -1221,6 +1557,9 @@ function renderDetail(): void {
   box.hidden = !open
   ui.root.classList.toggle('tv-detail-open', open)
   if (!open || task === null || snapshot === null) {
+    editingTaskId = null
+    deleteArmed = false
+    box.dataset.editing = ''
     return
   }
 
@@ -1230,11 +1569,19 @@ function renderDetail(): void {
   const tz = snapshot.user?.timezone ?? 'UTC'
   const todayKey = dayKeyOf(new Date(), tz)
 
+  if (editingTaskId === task.id) {
+    box.dataset.editing = '1'
+    box.append(editForm(task, data, snapshot, tz))
+    return
+  }
+  box.dataset.editing = ''
+
   box.append(
     h('div', { class: 'tv-detail-head' }, [
       h('h2', { class: 'tv-detail-heading', text: m.detailTitle }),
       iconButton('×', m.close, () => {
         detailOpen = false
+        editingTaskId = null
         render()
       })
     ]),
@@ -1302,13 +1649,225 @@ function renderDetail(): void {
 
   box.append(
     h('div', { class: 'tv-detail-actions' }, [
-      button(m.openTodoist, () => openExternal(task.url), 'tv-btn tv-btn-primary'),
-      button(m.close, () => {
-        detailOpen = false
-        render()
-      }, 'tv-btn')
+      button(m.complete, () => void completeTask(task.id), 'tv-btn'),
+      button(
+        m.edit,
+        () => {
+          editingTaskId = task.id
+          deleteArmed = false
+          box.dataset.editing = '0'
+          renderDetail()
+        },
+        'tv-btn tv-btn-primary'
+      ),
+      button(m.openTodoist, () => openExternal(task.url), 'tv-btn'),
+      button(
+        m.close,
+        () => {
+          detailOpen = false
+          editingTaskId = null
+          render()
+        },
+        'tv-btn'
+      )
     ])
   )
+}
+
+function formField(label: string, control: HTMLElement): HTMLElement {
+  return h('label', { class: 'tv-field' }, [
+    h('span', { class: 'tv-field-label', text: label }),
+    control
+  ])
+}
+
+function editForm(task: TodoistTask, data: PageData | null, snapshot: TodoistSnapshot, tz: string): HTMLElement {
+  const box = ui?.detail
+  const root = h('div', { class: 'tv-edit' })
+
+  const content = h('input', { class: 'tv-input tv-edit-content', attrs: { type: 'text' } })
+  content.value = task.content
+  const description = h('textarea', {
+    class: 'tv-input tv-edit-description',
+    attrs: { rows: '4' }
+  })
+  description.value = task.description
+
+  const project = h('select', { class: 'tv-input tv-edit-project' })
+  for (const item of [...snapshot.projects].sort((left, right) => left.order - right.order)) {
+    project.append(h('option', { attrs: { value: item.id }, text: item.name }))
+  }
+  project.value = task.projectId
+
+  const section = h('select', { class: 'tv-input tv-edit-section' })
+  const fillSections = (projectId: string, selected: string | null): void => {
+    section.replaceChildren(h('option', { attrs: { value: '' }, text: m.detailNone }))
+    const items = [...(data?.sections.values() ?? [])]
+      .filter((item) => item.projectId === projectId)
+      .sort((left, right) => left.order - right.order)
+    for (const item of items) {
+      section.append(h('option', { attrs: { value: item.id }, text: item.name }))
+    }
+    section.value =
+      selected !== null && items.some((item) => item.id === selected) ? selected : ''
+  }
+  fillSections(task.projectId, task.sectionId)
+  project.addEventListener('change', () => fillSections(project.value, null))
+
+  const dueDate = h('input', { class: 'tv-input tv-edit-date', attrs: { type: 'date' } })
+  dueDate.value = dueDayKey(task.due, tz) ?? ''
+  const dueTime = h('input', { class: 'tv-input tv-edit-time', attrs: { type: 'time' } })
+  dueTime.value = timeValue(task, tz)
+
+  const priority = h('select', { class: 'tv-input tv-edit-priority' })
+  for (const value of [4, 3, 2, 1]) {
+    priority.append(h('option', { attrs: { value: String(value) }, text: priorityName(value) }))
+  }
+  priority.value = String(task.priority)
+
+  const labels = h('input', { class: 'tv-input tv-edit-labels', attrs: { type: 'text' } })
+  labels.value = task.labels.join(', ')
+  labels.placeholder = '@label, @another'
+
+  const deadline = h('input', { class: 'tv-input tv-edit-deadline', attrs: { type: 'date' } })
+  deadline.value = task.deadline?.date ?? ''
+
+  const error = h('p', { class: 'tv-field-error', attrs: { role: 'alert' } })
+  error.hidden = true
+
+  const save = button(m.save, () => void saveEdit(), 'tv-btn tv-btn-primary')
+  const cancel = button(
+    m.cancel,
+    () => {
+      editingTaskId = null
+      deleteArmed = false
+      if (box !== undefined) {
+        box.dataset.editing = ''
+      }
+      renderDetail()
+    },
+    'tv-btn'
+  )
+  const remove = button(
+    m.delete,
+    () => {
+      if (!deleteArmed) {
+        deleteArmed = true
+        remove.textContent = m.confirmDelete
+        return
+      }
+      void removeTask()
+    },
+    'tv-btn tv-btn-danger'
+  )
+
+  const fail = (message: string): void => {
+    error.textContent = message
+    error.hidden = false
+  }
+
+  const saveEdit = async (): Promise<void> => {
+    const title = content.value.trim()
+    if (title === '') {
+      fail(m.titleRequired)
+      return
+    }
+    const input: TaskUpdateInput = {
+      id: task.id,
+      content: title,
+      description: description.value,
+      projectId: project.value,
+      sectionId: section.value === '' ? null : section.value,
+      dueDate: dueDate.value === '' ? null : dueDate.value,
+      dueTime: dueTime.value === '' ? null : dueTime.value,
+      priority: Number(priority.value) || 1,
+      labels: labels.value
+        .split(',')
+        .map((label) => label.trim())
+        .filter((label) => label !== ''),
+      deadline: deadline.value === '' ? null : deadline.value
+    }
+    save.disabled = true
+    try {
+      const result = await orca.plugin.request('task.update', input)
+      if (!result.ok) {
+        fail(errorText(result.error))
+        save.disabled = false
+        return
+      }
+      current = result.view
+      editingTaskId = null
+      deleteArmed = false
+      if (box !== undefined) {
+        box.dataset.editing = ''
+      }
+      showToast(m.savedToast)
+      render()
+    } catch (caught) {
+      fail(messageOf(caught))
+      save.disabled = false
+    }
+  }
+
+  const removeTask = async (): Promise<void> => {
+    remove.disabled = true
+    try {
+      const result = await orca.plugin.request('task.delete', { id: task.id })
+      if (!result.ok) {
+        fail(errorText(result.error))
+        remove.disabled = false
+        deleteArmed = false
+        remove.textContent = m.delete
+        return
+      }
+      current = result.view
+      selectedTaskId = null
+      detailOpen = false
+      editingTaskId = null
+      deleteArmed = false
+      showToast(m.savedToast)
+      render()
+    } catch (caught) {
+      fail(messageOf(caught))
+      remove.disabled = false
+    }
+  }
+
+  root.append(
+    formField(m.detailTitle, content),
+    formField(m.detailDescription, description),
+    h('div', { class: 'tv-edit-row' }, [
+      formField(m.detailProject, project),
+      formField(m.detailSection, section)
+    ]),
+    formField(m.detailDue, h('div', { class: 'tv-edit-due' }, [dueDate, dueTime])),
+    h('div', { class: 'tv-edit-row' }, [
+      formField(m.detailDeadline, deadline),
+      formField(m.detailPriority, priority)
+    ]),
+    formField(m.detailLabels, labels),
+    error,
+    h('div', { class: 'tv-edit-actions' }, [save, cancel, remove])
+  )
+  return root
+}
+
+/** The task's local time as an `<input type="time">` value. */
+function timeValue(task: TodoistTask, tz: string): string {
+  const raw = task.due?.datetime ?? null
+  if (raw === null) {
+    return ''
+  }
+  const at = Date.parse(raw)
+  if (!Number.isFinite(at)) {
+    return ''
+  }
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: tz,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(new Date(at))
 }
 
 function dueDetail(task: TodoistTask, tz: string, todayKey: string): Node | string {
@@ -1357,7 +1916,9 @@ function renderFooter(): void {
       text: m.showing(count)
     })
   ]
-  items.push(h('span', { class: 'tv-foot-item', text: m.readOnly }))
+  if (readOnly()) {
+    items.push(h('span', { class: 'tv-foot-item', text: m.readOnlyFile }))
+  }
   if (data !== null) {
     items.push(
       h('span', { class: 'tv-foot-item' }, [

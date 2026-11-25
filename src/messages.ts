@@ -22,7 +22,23 @@ export type Messages = {
   retry: string
   errorTitle: string
   staleTitle: string
-  readOnly: string
+  readOnlyFile: string
+  addTask: string
+  addTaskPlaceholder: string
+  createTask: string
+  newProject: string
+  projectName: string
+  createProject: string
+  save: string
+  cancel: string
+  edit: string
+  delete: string
+  confirmDelete: string
+  complete: string
+  undo: string
+  completedToast: (content: string) => string
+  savedToast: string
+  titleRequired: string
   close: string
   search: string
   searchPlaceholder: string
@@ -79,8 +95,8 @@ export type Messages = {
 }
 
 const en: Messages = {
-  title: 'Todoist Viewer',
-  tagline: 'Your tasks, read from Todoist.',
+  title: 'Todoist',
+  tagline: 'Your tasks, in Orca.',
   loading: 'Reading Todoist…',
   setupTitle: 'Connect your Todoist account',
   setupBody:
@@ -98,7 +114,23 @@ const en: Messages = {
   retry: 'Try again',
   errorTitle: 'Could not read Todoist',
   staleTitle: 'Showing the last read',
-  readOnly: 'Read-only',
+  readOnlyFile: 'This file is read-only, so view changes are not saved.',
+  addTask: 'Add a task',
+  addTaskPlaceholder: 'What needs doing?',
+  createTask: 'Add',
+  newProject: 'New project',
+  projectName: 'Project name',
+  createProject: 'Create',
+  save: 'Save',
+  cancel: 'Cancel',
+  edit: 'Edit',
+  delete: 'Delete',
+  confirmDelete: 'Delete for real?',
+  complete: 'Complete',
+  undo: 'Undo',
+  completedToast: (content) => `Completed: ${content}`,
+  savedToast: 'Saved',
+  titleRequired: 'A task needs a title.',
   close: 'Close',
   search: 'Search',
   searchPlaceholder: 'Search tasks · @label · #project · p1',
@@ -181,8 +213,8 @@ const en: Messages = {
 }
 
 const ko: Messages = {
-  title: 'Todoist 뷰어',
-  tagline: 'Todoist의 할 일을 한눈에.',
+  title: 'Todoist',
+  tagline: 'Todoist의 할 일을 오르카에서.',
   loading: 'Todoist를 읽는 중…',
   setupTitle: 'Todoist 계정 연결',
   setupBody:
@@ -200,7 +232,23 @@ const ko: Messages = {
   retry: '다시 시도',
   errorTitle: 'Todoist를 읽지 못했습니다',
   staleTitle: '마지막으로 읽은 내용',
-  readOnly: '읽기 전용',
+  readOnlyFile: '이 파일은 읽기 전용이라 보기 설정이 저장되지 않습니다.',
+  addTask: '할 일 추가',
+  addTaskPlaceholder: '무엇을 해야 하나요?',
+  createTask: '추가',
+  newProject: '새 프로젝트',
+  projectName: '프로젝트 이름',
+  createProject: '만들기',
+  save: '저장',
+  cancel: '취소',
+  edit: '편집',
+  delete: '삭제',
+  confirmDelete: '정말 삭제할까요?',
+  complete: '완료',
+  undo: '되돌리기',
+  completedToast: (content) => `완료: ${content}`,
+  savedToast: '저장했습니다',
+  titleRequired: '할 일 제목이 필요합니다.',
   close: '닫기',
   search: '검색',
   searchPlaceholder: '할 일 검색 · @라벨 · #프로젝트 · p1',

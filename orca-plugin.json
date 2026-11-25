@@ -1,9 +1,9 @@
 {
   "manifestVersion": 2,
   "id": "todoist-viewer",
-  "name": "Todoist Viewer",
-  "version": "0.1.0",
-  "description": "Read-only Todoist boards: a compact panel for today, and a full page with list, calendar, board and filters.",
+  "name": "Todoist",
+  "version": "0.2.0",
+  "description": "Todoist in Orca: add, edit, complete and filter tasks in a sidebar panel and a full list, calendar and board page.",
   "author": {
     "name": "pinion05"
   },
@@ -80,9 +80,14 @@
   },
   "cover": {
     "path": "docs/cover.png",
-    "alt": "The Todoist Viewer page in Orca: a Korean list of tasks grouped by date, with projects, labels and a task detail panel"
+    "alt": "The Todoist page in Orca: a Korean list of tasks grouped by date, with a quick-add row, a project rail and a task detail panel"
   },
   "screenshots": [
+    {
+      "path": "docs/edit.png",
+      "alt": "Editing a task: title, description, project, section, due date and time, priority, labels and deadline",
+      "caption": "Edit a task"
+    },
     {
       "path": "docs/calendar.png",
       "alt": "The calendar view: a six-week month grid with task chips on their due days and a day list",

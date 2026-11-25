@@ -1,7 +1,9 @@
-// The right-sidebar panel: a compact, read-only view of what the worker read from Todoist. A
-// panel has no network, so everything here comes from `todoist.get` and the worker's posts.
+// The right-sidebar panel: a compact view of what the worker read from Todoist, with a quick
+// add and a complete control. A panel has no network, so everything here comes from
+// `todoist.get`, the worker's writes and its posts.
 import {
   Badge,
+  Box,
   Button,
   Callout,
   Card,
@@ -45,6 +47,7 @@ import {
 import type {
   TokenStatus,
   TodoistError,
+  TodoistMutation,
   TodoistProject,
   TodoistSnapshot,
   TodoistTask,
@@ -61,6 +64,12 @@ const draft = atom('')
 const busy = atom(false)
 /** Which slice of the list the tabs show. */
 const filter = atom<'all' | 'today' | 'overdue' | 'week'>('today')
+/** The new task as it is typed. Never persisted. */
+const taskDraft = atom('')
+/** A create is running, so its control waits. */
+const creating = atom(false)
+/** Tasks whose completion is in flight. */
+const closing = atom<ReadonlySet<string>>(new Set())
 
 /** The most task rows the panel draws; the count below says how many matched in all. */
 const MAX_ROWS = 12
@@ -110,6 +119,64 @@ async function saveToken(): Promise<void> {
   }
 }
 
+/** Runs a write and draws its answer; a refusal is reported and the last view stays. */
+async function mutate(request: Promise<TodoistMutation>): Promise<boolean> {
+  set(busy, true)
+  try {
+    const result = await request
+    set(view, result.view)
+    if (!result.ok) {
+      const text = words().errors[result.error.code](result.error)
+      set(failure, {
+        title: words().errorTitle,
+        message:
+          result.error.detail === null || result.error.detail === ''
+            ? text
+            : `${text} ${result.error.detail}`,
+        retry: false
+      })
+      return false
+    }
+    set(failure, null)
+    return true
+  } catch (error) {
+    set(failure, { title: words().errorTitle, message: describe(error), retry: false })
+    return false
+  } finally {
+    set(busy, false)
+  }
+}
+
+async function createTask(): Promise<void> {
+  const content = read(taskDraft).trim()
+  if (content === '' || read(creating) || read(busy)) {
+    return
+  }
+  set(creating, true)
+  try {
+    if (await mutate(plugin.request('task.create', { content }))) {
+      set(taskDraft, '')
+      set(filter, 'all')
+    }
+  } finally {
+    set(creating, false)
+  }
+}
+
+async function completeTask(id: string): Promise<void> {
+  if (read(closing).has(id) || read(busy)) {
+    return
+  }
+  set(closing, new Set(read(closing)).add(id))
+  try {
+    await mutate(plugin.request('task.close', { id }))
+  } finally {
+    const next = new Set(read(closing))
+    next.delete(id)
+    set(closing, next)
+  }
+}
+
 async function openTask(url: string): Promise<void> {
   try {
     await shell.openExternal(url)
@@ -147,10 +214,7 @@ export default function Panel() {
   return (
     <Stack gap="md">
       <Row justify="between" align="center">
-        <Row gap="sm" align="center">
-          <Heading>{m.title}</Heading>
-          <Badge tone="neutral">{m.readOnly}</Badge>
-        </Row>
+        <Heading>{m.title}</Heading>
         {token !== null && token.source !== 'none' ? (
           <IconButton
             icon="refresh"
@@ -321,6 +385,26 @@ function SnapshotBody({
   const counts = subtaskCounts(snapshot.tasks)
   return (
     <Stack gap="sm">
+      <Row gap="xs" align="center">
+        <Box grow>
+          <Input
+            label={m.addTask}
+            labelHidden
+            placeholder={m.addTaskPlaceholder}
+            value={read(taskDraft)}
+            disabled={read(creating) || read(busy)}
+            onChange={(value) => set(taskDraft, value)}
+            onSubmit={() => void createTask()}
+          />
+        </Box>
+        <IconButton
+          icon="add"
+          label={m.createTask}
+          tooltip={m.createTask}
+          disabled={read(creating) || read(busy) || read(taskDraft).trim() === ''}
+          onPress={() => void createTask()}
+        />
+      </Row>
       <Row gap="xs" wrap>
         {stats.overdue > 0 ? (
           <Badge tone="danger">{`${m.stats.overdue} ${stats.overdue}`}</Badge>
@@ -415,13 +499,16 @@ function TaskRow({
   const due = day === null ? null : time === null ? day : `${day} ${time}`
   const description = [project, due].filter((part): part is string => part !== null).join(' · ')
   return (
-    <ListItem
-      title={task.content}
-      description={description}
-      icon="check"
-      onPress={() => void openTask(task.url)}
-    >
+    <ListItem title={task.content} description={description}>
       <Row gap="xs" align="center" wrap>
+        <IconButton
+          icon="check"
+          label={m.complete}
+          tooltip={m.complete}
+          disabled={read(closing).has(task.id) || read(busy)}
+          onPress={() => void completeTask(task.id)}
+        />
+        <Link onPress={() => void openTask(task.url)}>{m.openTodoist}</Link>
         <Badge tone={priorityTone(task.priority)}>{priorityName(task.priority)}</Badge>
         {task.labels.slice(0, 2).map((label) => (
           <Badge key={label} tone="neutral">

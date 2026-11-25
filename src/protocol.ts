@@ -135,6 +135,49 @@ export type TodoistView = {
   state: TodoistState
 }
 
+/** What a surface sends to create a task. An omitted or null due date leaves it undated. */
+export type TaskCreateInput = {
+  content: string
+  description?: string
+  /** Null or omitted puts it in the Inbox. */
+  projectId?: string | null
+  sectionId?: string | null
+  /** YYYY-MM-DD. */
+  dueDate?: string | null
+  /** HH:mm, for a task with a time. */
+  dueTime?: string | null
+  /** Todoist's scale: 1 normal, 4 urgent. */
+  priority?: number
+  labels?: string[]
+  /** YYYY-MM-DD. */
+  deadline?: string | null
+}
+
+/** The whole editable state of a task; the worker sends only what changed where it can. */
+export type TaskUpdateInput = {
+  id: string
+  content: string
+  description: string
+  projectId: string
+  sectionId: string | null
+  dueDate: string | null
+  dueTime: string | null
+  priority: number
+  labels: string[]
+  deadline: string | null
+}
+
+export type ProjectCreateInput = {
+  name: string
+  /** Todoist's colour name, such as `berry_red`; the worker picks one when omitted. */
+  color?: string
+}
+
+/** A write's answer: the view after it, or the reason it was refused and the view to keep. */
+export type TodoistMutation =
+  | { ok: true; view: TodoistView }
+  | { ok: false; error: TodoistError; view: TodoistView }
+
 declare module 'orca' {
   interface PluginRequests {
     /** The current view; reads Todoist first when the cache is due. */
@@ -145,6 +188,18 @@ declare module 'orca' {
     'token.set': { input: { value: string }; output: TodoistView }
     /** Deletes the saved token. One from a setting or the environment stays in use. */
     'token.forget': { output: TodoistView }
+    /** Creates a task, then reads the account again. */
+    'task.create': { input: TaskCreateInput; output: TodoistMutation }
+    /** Updates a task and, when its project or section changed, moves it too. */
+    'task.update': { input: TaskUpdateInput; output: TodoistMutation }
+    /** Completes a task (and its subtasks, as Todoist does). */
+    'task.close': { input: { id: string }; output: TodoistMutation }
+    /** Reopens a completed task by id. */
+    'task.reopen': { input: { id: string }; output: TodoistMutation }
+    /** Deletes a task and its subtasks. */
+    'task.delete': { input: { id: string }; output: TodoistMutation }
+    /** Creates a project. */
+    'project.create': { input: ProjectCreateInput; output: TodoistMutation }
   }
   interface PluginPanelEvents {
     /** Posted to every open panel and page after the worker reads Todoist. */

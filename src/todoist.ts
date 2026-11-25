@@ -12,7 +12,10 @@ import type {
   TodoistSection,
   TodoistSnapshot,
   TodoistTask,
-  TodoistUser
+  TodoistUser,
+  TaskCreateInput,
+  TaskUpdateInput,
+  ProjectCreateInput
 } from './protocol'
 
 const BASE_URL = 'https://api.todoist.com'
@@ -99,6 +102,10 @@ function abortError(): Error {
   return new DOMException('The request was aborted.', 'AbortError')
 }
 
+function describe(value: unknown): string {
+  return value instanceof Error ? value.message : String(value)
+}
+
 /** Keeps a token out of anything a surface or a log may show. */
 function redact(text: string, token: string): string {
   return token === '' ? text : text.split(token).join('[redacted]')
@@ -165,28 +172,39 @@ async function failureDetail(response: Response, token: string): Promise<string 
 async function requestJson(
   path: string,
   token: string,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  request: { method?: 'GET' | 'POST' | 'DELETE'; body?: unknown; form?: boolean } = {}
 ): Promise<unknown> {
   const timeout = AbortSignal.timeout(TIMEOUT_MS)
   const combined = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${token}`,
+    Accept: 'application/json'
+  }
+  if (request.body !== undefined) {
+    headers['Content-Type'] =
+      request.form === true ? 'application/x-www-form-urlencoded' : 'application/json'
+  }
   let response: Response
   try {
     response = await fetch(`${BASE_URL}${path}`, {
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/json'
-      },
+      method: request.method ?? 'GET',
+      headers,
+      body:
+        request.body === undefined
+          ? undefined
+          : request.form === true
+            ? new URLSearchParams(request.body as Record<string, string>).toString()
+            : JSON.stringify(request.body),
       signal: combined
     })
-  } catch {
+  } catch (error) {
     if (signal?.aborted === true) {
       throw abortError()
     }
     if (timeout.aborted) {
       throw new RequestError('timeout')
     }
-    // The failure's own words can name the machine, not Todoist; the view has its own message.
     throw new RequestError('unreachable')
   }
 
@@ -208,16 +226,40 @@ async function requestJson(
     throw new RequestError('http', { httpStatus: response.status, detail })
   }
 
+  if (response.status === 204) {
+    return null
+  }
+  let text: string
   try {
-    return await response.json()
-  } catch {
+    text = await response.text()
+  } catch (error) {
     if (signal?.aborted === true) {
       throw abortError()
     }
     if (timeout.aborted) {
       throw new RequestError('timeout')
     }
-    throw new RequestError('bad_response', { httpStatus: response.status })
+    throw new RequestError('bad_response', {
+      httpStatus: response.status,
+      detail: clean(describe(error), token)
+    })
+  }
+  if (text.trim() === '') {
+    return null
+  }
+  try {
+    return JSON.parse(text) as unknown
+  } catch (error) {
+    if (signal?.aborted === true) {
+      throw abortError()
+    }
+    if (timeout.aborted) {
+      throw new RequestError('timeout')
+    }
+    throw new RequestError('bad_response', {
+      httpStatus: response.status,
+      detail: clean(describe(error), token)
+    })
   }
 }
 
@@ -438,6 +480,155 @@ function normalizeAll<T>(raw: unknown[], normalize: (value: unknown) => T | null
     }
   }
   return items
+}
+
+// --- writes ----------------------------------------------------------------------------------
+
+export type WriteOptions = { token: string; signal?: AbortSignal }
+
+function cleanLabels(labels: readonly string[] | undefined): string[] {
+  if (labels === undefined) {
+    return []
+  }
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const value of labels) {
+    const label = typeof value === 'string' ? value.trim() : ''
+    if (label === '' || seen.has(label)) {
+      continue
+    }
+    seen.add(label)
+    out.push(label)
+    if (out.length >= 100) {
+      break
+    }
+  }
+  return out
+}
+
+function clampPriority(value: number | undefined): number {
+  return Math.min(4, Math.max(1, Math.round(value ?? 1)))
+}
+
+/** A due date as Todoist accepts it. An absent date means "leave it alone" here; clearing is a
+ *  separate Sync API command, because the REST update cannot express a null due date. */
+function dueBody(
+  date: string | null | undefined,
+  time: string | null | undefined
+): Record<string, unknown> {
+  if (date === null || date === undefined || date.trim() === '') {
+    return {}
+  }
+  if (time !== null && time !== undefined && time.trim() !== '') {
+    return { due_datetime: `${date.trim()}T${time.trim()}:00` }
+  }
+  return { due_date: date.trim() }
+}
+
+function taskPath(id: string, suffix = ''): string {
+  return `${API}/tasks/${encodeURIComponent(id)}${suffix}`
+}
+
+export async function createTask(
+  options: WriteOptions & { input: TaskCreateInput }
+): Promise<void> {
+  const { input } = options
+  const body: Record<string, unknown> = {
+    content: input.content.trim(),
+    priority: clampPriority(input.priority)
+  }
+  if (input.description !== undefined && input.description.trim() !== '') {
+    body.description = input.description.trim()
+  }
+  if (input.projectId !== undefined && input.projectId !== null && input.projectId !== '') {
+    body.project_id = input.projectId
+  }
+  if (input.sectionId !== undefined && input.sectionId !== null && input.sectionId !== '') {
+    body.section_id = input.sectionId
+  }
+  const labels = cleanLabels(input.labels)
+  if (labels.length > 0) {
+    body.labels = labels
+  }
+  Object.assign(body, dueBody(input.dueDate, input.dueTime))
+  if (input.deadline !== undefined && input.deadline !== null && input.deadline !== '') {
+    body.deadline_date = input.deadline
+  }
+  await requestJson(`${API}/tasks`, options.token, options.signal, { method: 'POST', body })
+}
+
+export async function updateTask(
+  options: WriteOptions & { input: TaskUpdateInput }
+): Promise<void> {
+  const { input } = options
+  const body: Record<string, unknown> = {
+    content: input.content.trim(),
+    description: input.description,
+    labels: cleanLabels(input.labels),
+    priority: clampPriority(input.priority),
+    ...dueBody(input.dueDate, input.dueTime),
+    deadline_date: input.deadline === null || input.deadline === '' ? null : input.deadline
+  }
+  await requestJson(taskPath(input.id), options.token, options.signal, { method: 'POST', body })
+}
+
+/** Clears a due date; the REST update cannot, so this is the Sync API's `item_update`. */
+export async function clearDueOnTask(options: WriteOptions & { id: string }): Promise<void> {
+  const uuid = `due-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  const commands = JSON.stringify([
+    { type: 'item_update', uuid, args: { id: options.id, due: null } }
+  ])
+  const response = await requestJson(`${API}/sync`, options.token, options.signal, {
+    method: 'POST',
+    form: true,
+    body: { commands, sync_token: '*' }
+  })
+  const status = recordOf(response)?.sync_status
+  const result = recordOf(status)?.[uuid]
+  if (result !== 'ok') {
+    const detail =
+      recordOf(result) !== null
+        ? stringOf(recordOf(result)?.error) ?? stringOf(recordOf(result)?.error_code)
+        : typeof result === 'string'
+          ? result
+          : null
+    throw new RequestError('http', { detail: detail ?? 'Todoist refused to clear the due date.' })
+  }
+}
+
+export async function moveTask(
+  options: WriteOptions & { id: string; projectId: string; sectionId: string | null }
+): Promise<void> {
+  await requestJson(taskPath(options.id, '/move'), options.token, options.signal, {
+    method: 'POST',
+    body: { project_id: options.projectId, section_id: options.sectionId }
+  })
+}
+
+export async function closeTask(options: WriteOptions & { id: string }): Promise<void> {
+  await requestJson(taskPath(options.id, '/close'), options.token, options.signal, {
+    method: 'POST'
+  })
+}
+
+export async function reopenTask(options: WriteOptions & { id: string }): Promise<void> {
+  await requestJson(taskPath(options.id, '/reopen'), options.token, options.signal, {
+    method: 'POST'
+  })
+}
+
+export async function deleteTask(options: WriteOptions & { id: string }): Promise<void> {
+  await requestJson(taskPath(options.id), options.token, options.signal, { method: 'DELETE' })
+}
+
+export async function createProject(
+  options: WriteOptions & { input: ProjectCreateInput }
+): Promise<void> {
+  const name = options.input.name.trim()
+  await requestJson(`${API}/projects`, options.token, options.signal, {
+    method: 'POST',
+    body: { name, color: options.input.color ?? 'charcoal' }
+  })
 }
 
 // --- snapshot --------------------------------------------------------------------------------

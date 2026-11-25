@@ -275,14 +275,84 @@ test('shows the empty state with no tasks, and no-match when a filter hides them
   )
 })
 
-test('opens a task in Todoist when its row is pressed', async () => {
+test('opens a task in Todoist from its row', async () => {
   const tasks = sampleTasks()
   const target = tasks[0]
   await withPanel({ requests: { 'todoist.get': () => readyView(tasks) } }, async (view, host) => {
-    await view.press({ label: 'Write report' })
+    await view.press({ text: 'Open Todoist' })
     assert.deepEqual(host.callsOf('shell.openExternal'), [{ url: target.url }])
     nothingWentWrong(view)
   })
+})
+
+test('adds a task from the panel', async () => {
+  let created: unknown = null
+  await withPanel(
+    {
+      requests: {
+        'todoist.get': () => readyView(sampleTasks()),
+        'task.create': (input) => {
+          created = input
+          return {
+            ok: true,
+            view: readyView([
+              ...sampleTasks(),
+              task({ id: 't-new', content: 'New task', due: dueOn(todayKey()) })
+            ])
+          }
+        }
+      }
+    },
+    async (view) => {
+      await view.type({ label: 'Add a task' }, 'New task')
+      await view.press({ label: 'Add' })
+      assert.deepEqual(created, { content: 'New task' })
+      assert.ok(view.find({ label: 'New task' }))
+      nothingWentWrong(view)
+    }
+  )
+})
+
+test('completes a task from its row', async () => {
+  let closed: string | null = null
+  const remaining = sampleTasks().filter((item) => item.id !== 't1')
+  await withPanel(
+    {
+      requests: {
+        'todoist.get': () => readyView(sampleTasks()),
+        'task.close': ({ id }) => {
+          closed = id
+          return { ok: true, view: readyView(remaining) }
+        }
+      }
+    },
+    async (view) => {
+      await view.press({ label: 'Complete' })
+      assert.equal(closed, 't1')
+      assert.equal(view.find({ label: 'Write report' }), null)
+      nothingWentWrong(view)
+    }
+  )
+})
+
+test('reports a refused write', async () => {
+  await withPanel(
+    {
+      requests: {
+        'todoist.get': () => readyView(sampleTasks()),
+        'task.close': () => ({
+          ok: false,
+          error: { code: 'forbidden', httpStatus: 403, detail: null, retryAfterMs: null },
+          view: readyView(sampleTasks())
+        })
+      }
+    },
+    async (view) => {
+      await view.press({ label: 'Complete' })
+      assert.ok(view.find({ text: /not allowed to read/ }))
+      nothingWentWrong(view)
+    }
+  )
 })
 
 test('follows the worker as it posts a new view', async () => {
