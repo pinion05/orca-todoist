@@ -11,7 +11,7 @@ import {
   type MockHostOptions,
   type TestPanel
 } from 'orca/testing'
-import { addDays, dayKeyOf } from './select'
+import { addDays, addMonths, dayKeyOf, monthOf } from './select'
 import type {
   TodoistDue,
   TodoistProject,
@@ -199,6 +199,69 @@ async function openFilters(view: TestPanel): Promise<void> {
   await view.toggle(filters!)
 }
 
+/** Opens the task named `content` in the editor: its row is the ListItem the title sits in. */
+async function openTask(view: TestPanel, content: string): Promise<void> {
+  const row = view.find({ type: 'ListItem', text: new RegExp(`^${content}`) })
+  assert.ok(row)
+  await view.press(row!)
+}
+
+/** The drawn tree as plain data, for checks on how something is built rather than on its words. */
+type TreeNode = { type?: string; key?: string; props?: Record<string, unknown>; children?: (TreeNode | string)[] }
+
+function nodesOf(node: unknown, type: string): TreeNode[] {
+  const found: TreeNode[] = []
+  const visit = (item: unknown): void => {
+    if (typeof item !== 'object' || item === null) {
+      return
+    }
+    const tree = item as TreeNode
+    if (tree.type === type) {
+      found.push(tree)
+    }
+    for (const child of tree.children ?? []) {
+      visit(child)
+    }
+  }
+  visit(node)
+  return found
+}
+
+/** Everything a node says, its descendants included. */
+function wordsOf(node: TreeNode): string {
+  return (node.children ?? [])
+    .map((child) => (typeof child === 'string' ? child : wordsOf(child)))
+    .join('')
+}
+
+/** Elements and strings: what Orca counts against the 5000 nodes it takes in one tree. */
+function sizeOf(node: unknown): number {
+  if (typeof node === 'string') {
+    return 1
+  }
+  if (typeof node !== 'object' || node === null) {
+    return 0
+  }
+  const children = (node as TreeNode).children ?? []
+  return 1 + children.reduce((sum, child) => sum + sizeOf(child), 0)
+}
+
+/** `count` tasks with a full line of details under each title, spread over sixty days. */
+function manyTasks(count: number): TodoistTask[] {
+  const today = todayKey()
+  return Array.from({ length: count }, (_, index) =>
+    task({
+      id: `many-${index}`,
+      content: `Task ${index + 1} of many, with a title long enough to wrap in a narrow sidebar`,
+      due: dueOn(addDays(today, (index % 60) - 20)),
+      priority: 2 + (index % 3),
+      labels: ['one', 'two'],
+      parentId: index % 5 === 0 ? null : `many-${index - (index % 5)}`,
+      order: index
+    })
+  )
+}
+
 test('asks for a token when there is none, and saves what is typed', async () => {
   let saved: string | null = null
   await withPanel(
@@ -334,7 +397,7 @@ test('opens and edits a task, and saves it', async () => {
       }
     },
     async (view) => {
-      await view.press({ text: 'Write report' })
+      await openTask(view, 'Write report')
       assert.ok(view.find({ label: 'Task' }))
       await view.type({ label: 'Task' }, 'Renamed report', { replace: true })
       await view.select({ label: 'Priority' }, '2')
@@ -351,7 +414,7 @@ test('opens and edits a task, and saves it', async () => {
 
 test('opens a task in Todoist', async () => {
   await withPanel({ requests: { 'todoist.get': () => readyView(sampleTasks()) } }, async (view, host) => {
-    await view.press({ text: 'Write report' })
+    await openTask(view, 'Write report')
     await view.press({ text: 'Open Todoist' })
     assert.deepEqual(host.callsOf('shell.openExternal'), [
       { url: 'https://app.todoist.com/app/task/t1' }
@@ -376,7 +439,7 @@ test('deletes a task after a second press', async () => {
       }
     },
     async (view) => {
-      await view.press({ text: 'Write report' })
+      await openTask(view, 'Write report')
       await view.press({ text: 'Delete' })
       assert.ok(view.find({ text: 'Delete for real?' }))
       await view.press({ text: 'Delete for real?' })
@@ -522,4 +585,140 @@ test('speaks Korean in a Korean Orca', async () => {
       nothingWentWrong(view)
     }
   )
+})
+
+test('wraps a long title and its details instead of cutting them off', async () => {
+  const title =
+    'Reschedule the appointment that was cancelled last week because the dentist is away'
+  const tasks = [
+    task({
+      id: 'long',
+      content: title,
+      due: dueOn(addDays(todayKey(), -2)),
+      priority: 4,
+      labels: ['health', 'errands']
+    }),
+    task({ id: 'child', content: 'Call the insurance', parentId: 'long' })
+  ]
+  await withPanel({ requests: { 'todoist.get': () => readyView(tasks) } }, async (view) => {
+    const tree = view.tree()
+    const row = nodesOf(tree, 'ListItem').find((node) => wordsOf(node).startsWith(title))
+    assert.ok(row)
+    const [heading, meta] = nodesOf(row!, 'Text')
+    // A Button, or a `truncate`, would keep the title on one line and cut off both its ends.
+    assert.equal(heading?.children?.join(''), title)
+    assert.equal(heading?.props?.truncate, undefined)
+    assert.equal(nodesOf(tree, 'Button').some((node) => wordsOf(node).includes(title)), false)
+    const words = wordsOf(meta!)
+    assert.match(words, /Work · 2 days overdue · @health · @errands · P1 · 1 subtask/)
+    // The overdue date and the priority are coloured, so each is a Text of its own.
+    assert.ok(nodesOf(meta!, 'Text').some((node) => node.props?.tone === 'danger'))
+    nothingWentWrong(view)
+  })
+})
+
+test('the calendar lines its days up in seven equal columns and marks the days that have tasks', async () => {
+  const today = todayKey()
+  const yesterday = addDays(today, -1)
+  const tomorrow = addDays(today, 1)
+  const tasks = [
+    task({ id: 'a', content: 'First today', due: dueOn(today), order: 0 }),
+    task({ id: 'b', content: 'Second today', due: dueOn(today), order: 1 }),
+    task({ id: 'c', content: 'Yesterday task', due: dueOn(yesterday), order: 2 }),
+    task({ id: 'd', content: 'Tomorrow task', due: dueOn(tomorrow), order: 3 })
+  ]
+  await withPanel({ requests: { 'todoist.get': () => readyView(tasks) } }, async (view) => {
+    await view.select({ type: 'Tabs' }, 'calendar')
+    await view.settled()
+    /** The grid as last drawn, and in it the cell of a day. */
+    const frameOf = (): TreeNode | undefined =>
+      nodesOf(view.tree(), 'Box').find((node) => node.props?.border === true)
+    const cellOf = (key: string): TreeNode | undefined =>
+      nodesOf(frameOf()!, 'Box').find((node) => node.key === key)
+    /** What a day's count pill says; undefined when the day shows none. */
+    const pillOf = (key: string): TreeNode | undefined =>
+      nodesOf(cellOf(key)!, 'Box').find((node) => node.props?.radius === 'full')
+    // The weekday row and one row a week, each seven cells that start from no width, so they
+    // share the row equally however long their content is.
+    const rows = nodesOf(frameOf()!, 'Box').filter((node) => node.props?.direction === 'row')
+    assert.ok(rows.length >= 5)
+    for (const row of rows) {
+      assert.equal(row.children?.length, 7)
+      for (const cell of row.children ?? []) {
+        assert.equal(typeof cell, 'object')
+        assert.equal((cell as TreeNode).props?.grow, true)
+        assert.equal((cell as TreeNode).props?.width, 0)
+      }
+    }
+    assert.equal(wordsOf(pillOf(today)!), '2')
+    assert.equal(wordsOf(pillOf(yesterday)!), '1')
+    assert.equal(pillOf(yesterday)?.props?.background, 'danger')
+    // The day after tomorrow has no task, so no pill.
+    assert.equal(pillOf(addDays(today, 2)), undefined)
+    // A day is chosen without leaving the grid: its tasks list under it and its cell is marked.
+    // The target stays in the month however the month ends.
+    const target = monthOf(tomorrow) === monthOf(today) ? tomorrow : yesterday
+    const listed = target === tomorrow ? /^Tomorrow task/ : /^Yesterday task/
+    assert.equal(view.find({ type: 'ListItem', text: listed }), null)
+    await view.press({ type: 'Button', text: String(Number(target.slice(8))) })
+    await view.settled()
+    assert.ok(view.find({ type: 'ListItem', text: listed }))
+    assert.equal(cellOf(target)?.props?.background, 'muted')
+    nothingWentWrong(view)
+  })
+})
+
+test('moving to another month selects a day in it', async () => {
+  // Only today has a task, so the next month opens on its first day whatever today's date is.
+  const todays = sampleTasks().filter((item) => item.due?.date === todayKey())
+  await withPanel({ requests: { 'todoist.get': () => readyView(todays) } }, async (view) => {
+    await view.select({ type: 'Tabs' }, 'calendar')
+    assert.ok(view.find({ type: 'ListItem' }))
+    await view.press({ text: '›' })
+    assert.equal(view.persisted.plugin['todoist.day'], `${addMonths(monthOf(todayKey()), 1)}-01`)
+    // Nothing from the old month stays listed under the grid.
+    assert.equal(view.find({ type: 'ListItem' }), null)
+    await view.press({ text: 'Today' })
+    assert.equal(view.persisted.plugin['todoist.day'], todayKey())
+    assert.ok(view.find({ type: 'ListItem' }))
+    nothingWentWrong(view)
+  })
+})
+
+test('the quick add gives its date a line of its own rather than squeezing the title', async () => {
+  await withPanel({ requests: { 'todoist.get': () => readyView(sampleTasks()) } }, async (view) => {
+    const wrapping = nodesOf(view.tree(), 'Row').find(
+      (node) => node.props?.wrap === true && nodesOf(node, 'Input').length === 2
+    )
+    assert.ok(wrapping)
+    const title = nodesOf(wrapping!, 'Box').find((node) => node.props?.maxWidth === '100%')
+    const date = nodesOf(wrapping!, 'Box').find((node) => node.props?.width === 120)
+    assert.ok(title)
+    assert.ok(date)
+    // The title and the date are the row's two items, so the date wraps as a whole.
+    assert.deepEqual(wrapping!.children, [title, date])
+    // The title claims 260px before it shares a line, and never more than the sidebar holds.
+    assert.equal(title!.props?.grow, true)
+    assert.equal(title!.props?.width, 260)
+    assert.equal(nodesOf(title!, 'IconButton').length, 1)
+    assert.equal(date!.props?.shrink, false)
+  })
+})
+
+test('keeps drawing when there are more tasks than one view may hold', async () => {
+  await withPanel({ requests: { 'todoist.get': () => readyView(manyTasks(700)) } }, async (view) => {
+    assert.ok(sizeOf(view.tree()) < 5000)
+    assert.ok(view.findAll({ type: 'ListItem' }).length > 100)
+    assert.ok(view.findAll({ type: 'ListItem' }).length < 700)
+    // One note for the whole view says what is missing. The board and the list hold all 700 rows
+    // at once and leave some out; a calendar day holds a dozen and shows them all.
+    const note = /^Showing \d+ of 700 tasks\. Narrow the filters to see the rest\.$/
+    assert.equal(view.findAll({ text: note }).length, 1)
+    for (const [tab, notes] of [['calendar', 0], ['board', 1], ['list', 1]] as const) {
+      await view.select({ type: 'Tabs' }, tab)
+      assert.ok(sizeOf(view.tree()) < 5000, tab)
+      assert.equal(view.findAll({ text: note }).length, notes, tab)
+      nothingWentWrong(view)
+    }
+  })
 })

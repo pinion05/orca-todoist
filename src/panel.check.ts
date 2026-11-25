@@ -116,6 +116,21 @@ function readyView(tasks: TodoistTask[]): TodoistView {
   }
 }
 
+/** More tasks than one view may draw, so the note about the rows left out is on screen. */
+function crowdedTasks(count: number): TodoistTask[] {
+  const today = todayKey()
+  return Array.from({ length: count }, (_, index) =>
+    task({
+      id: `crowd-${index}`,
+      content: `Task ${index + 1} of ${count}, with a title long enough to wrap in a narrow sidebar`,
+      due: dueOn(addDays(today, (index % 60) - 20)),
+      priority: 2 + (index % 3),
+      labels: ['one', 'two'],
+      order: index
+    })
+  )
+}
+
 function noTokenView(protection: TokenProtection = 'os-keyring'): TodoistView {
   return {
     token: { source: 'none', masked: null, protection },
@@ -156,6 +171,7 @@ export default defineCheck({
     }
   },
   ready: { requests: { 'todoist.get': () => readyView(sampleTasks()) } },
+  crowded: { requests: { 'todoist.get': () => readyView(crowdedTasks(600)) } },
   empty: { requests: { 'todoist.get': () => readyView([]) } },
   stale: { requests: { 'todoist.get': () => staleView() } },
   error: { requests: { 'todoist.get': () => failedView() } },

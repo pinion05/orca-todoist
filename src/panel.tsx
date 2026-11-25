@@ -14,6 +14,8 @@ import {
   IconButton,
   Input,
   Link,
+  List,
+  ListItem,
   RelativeTime,
   Row,
   Select,
@@ -32,6 +34,7 @@ import {
   read,
   set,
   update,
+  type OrcaNode,
   type PanelContext
 } from 'orca'
 import { priorityName } from './colors'
@@ -57,6 +60,7 @@ import {
   statsOf,
   subtaskCounts,
   tasksByDay,
+  type CalendarCell,
   type DueBucket,
   type SortKey,
   type ViewFilters
@@ -73,6 +77,15 @@ import type {
 } from './protocol'
 
 type PanelView = 'list' | 'calendar' | 'board'
+
+const MONTH_KEY = /^\d{4}-(0[1-9]|1[0-2])$/
+const DAY_KEY = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * Orca refuses a tree of more than 5000 nodes (strings included) and then draws nothing, so a long
+ * list stops here and says how many rows it left out. The rest of the panel takes under 700.
+ */
+const ROW_BUDGET = 4200
 
 /** What a persisted view may hold, checked on the way out of storage. */
 function viewOf(value: string): PanelView {
@@ -598,25 +611,39 @@ function Body({ current, m }: { current: TodoistView; m: Messages }) {
     return <TaskEditor task={task} snapshot={snapshot} timeZone={timeZone} m={m} />
   }
   return (
+    // The quick add keeps its title 260px wide before the due date may sit beside it, so a sidebar
+    // narrower than about 410px moves the due date to its own line instead of squeezing the title.
+    // `maxWidth` keeps the title inside a sidebar narrower than 260px.
     <Stack gap="sm">
       {current.state.status === 'error' ? (
         <Callout tone="warning" title={m.staleTitle}>
           <Text size="xs">{m.errors[current.state.error.code](current.state.error)}</Text>
         </Callout>
       ) : null}
-      <Row gap="xs" align="center">
-        <Box grow>
-          <Input
-            label={m.addTask}
-            labelHidden
-            placeholder={m.addTaskPlaceholder}
-            value={read(creating)}
-            disabled={read(busy)}
-            onChange={(value) => set(creating, value)}
-            onSubmit={() => void addTask()}
-          />
+      <Row gap="xs" align="center" wrap>
+        <Box grow width={260} maxWidth="100%">
+          <Row gap="xs" align="center">
+            <Box grow>
+              <Input
+                label={m.addTask}
+                labelHidden
+                placeholder={m.addTaskPlaceholder}
+                value={read(creating)}
+                disabled={read(busy)}
+                onChange={(value) => set(creating, value)}
+                onSubmit={() => void addTask()}
+              />
+            </Box>
+            <IconButton
+              icon="add"
+              label={m.createTask}
+              tooltip={m.createTask}
+              disabled={read(busy) || read(creating).trim() === ''}
+              onPress={() => void addTask()}
+            />
+          </Row>
         </Box>
-        <Box width={104}>
+        <Box width={120} shrink={false}>
           <Input
             label={m.detailDue}
             labelHidden
@@ -628,13 +655,6 @@ function Body({ current, m }: { current: TodoistView; m: Messages }) {
             onSubmit={() => void addTask()}
           />
         </Box>
-        <IconButton
-          icon="add"
-          label={m.createTask}
-          tooltip={m.createTask}
-          disabled={read(busy) || read(creating).trim() === ''}
-          onPress={() => void addTask()}
-        />
       </Row>
       <Stats snapshot={snapshot} todayKey={todayKey} timeZone={timeZone} m={m} />
       <Input
@@ -701,6 +721,9 @@ function Filters({ snapshot, m }: { snapshot: TodoistSnapshot; m: Messages }) {
   return (
     <Collapsible title={m.filters} description={active ? m.activeFilters : undefined} defaultOpen={false}>
       <Stack gap="xs">
+        <Text size="xs" muted>
+          {m.searchHint}
+        </Text>
         <Select
           label={m.projects}
           value={read(project)}
@@ -854,100 +877,76 @@ function ListView({ data, m }: { data: ViewData; m: Messages }) {
   if (sorted.length === 0) {
     return <EmptyState icon="search" title={m.noMatch} description={m.noMatchBody} />
   }
-  const grouped = sortOf(read(sort)) === 'due' && read(bucket) === 'all'
-  if (!grouped) {
+  const pager = pagerOf(data, m)
+  if (sortOf(read(sort)) !== 'due' || read(bucket) !== 'all') {
     return (
       <Stack gap="xs">
-        {sorted.map((task) => (
-          <TaskRow
-            key={task.id}
-            task={task}
-            data={data}
-            m={m}
-            disabled={read(closing).has(task.id) || read(busy)}
-            onSelect={() => selectTask(task, data.timeZone)}
-            onComplete={() => void completeTask(task)}
-          />
-        ))}
+        <Rows tasks={pager.take(sorted)} data={data} m={m} />
+        <LeftOut page={pager.page} m={m} />
       </Stack>
     )
   }
   return (
     <Stack gap="xs">
-      {groupByBucket(sorted, data.todayKey, data.timeZone, sortOf(read(sort)), data.projects).map((group) => (
-        <Collapsible
-          key={group.bucket}
-          title={m.buckets[group.bucket]}
-          description={String(group.tasks.length)}
-          defaultOpen
-        >
-          <Stack gap="xs">
-            {group.tasks.map((task) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                data={data}
-                m={m}
-                disabled={read(closing).has(task.id) || read(busy)}
-                onSelect={() => selectTask(task, data.timeZone)}
-                onComplete={() => void completeTask(task)}
-              />
-            ))}
-          </Stack>
-        </Collapsible>
+      {groupByBucket(sorted, data.todayKey, data.timeZone, sortOf(read(sort)), data.projects).map(
+        (group) => (
+          <Collapsible
+            key={group.bucket}
+            title={m.buckets[group.bucket]}
+            description={String(group.tasks.length)}
+            defaultOpen
+          >
+            <Rows tasks={pager.take(group.tasks)} data={data} m={m} />
+          </Collapsible>
+        )
+      )}
+      <LeftOut page={pager.page} m={m} />
+    </Stack>
+  )
+}
+
+/** The rows a view draws; each opens in the editor and completes in place. */
+function Rows({ tasks, data, m }: { tasks: readonly TodoistTask[]; data: ViewData; m: Messages }) {
+  return (
+    <Stack gap="xs">
+      {tasks.map((task) => (
+        <TaskRow key={task.id} task={task} data={data} m={m} />
       ))}
     </Stack>
   )
 }
 
-function TaskRow({
-  task,
-  data,
-  m,
-  disabled,
-  onSelect,
-  onComplete
-}: {
-  task: TodoistTask
-  data: ViewData
-  m: Messages
-  disabled: boolean
-  onSelect: () => void
-  onComplete: () => void
-}) {
-  const project = data.projects.get(task.projectId)
-  const dayKey = dueDayKey(task.due, data.timeZone)
-  const due =
-    dayKey === null
-      ? task.due?.string ?? null
-      : dayLabel(m, dayKey, data.todayKey, env.locale, (key, locale) => formatDay(key, locale))
-  const time = dayKey === null ? null : formatTime(task.due?.datetime ?? null, env.locale, data.timeZone)
-  const meta = [project?.name ?? null, due, time, ...task.labels.map((item) => `@${item}`)]
-    .filter((part): part is string => part !== null && part !== '')
-    .join(' · ')
-  const subtasks = data.counts.get(task.id) ?? 0
+/**
+ * One task. The title is `Text` in a `ListItem`, so a long one wraps and stays left-aligned; a
+ * `Button` keeps its text on one line however narrow the sidebar gets, and cuts it off instead.
+ */
+function TaskRow({ task, data, m }: { task: TodoistTask; data: ViewData; m: Messages }) {
+  const disabled = read(closing).has(task.id) || read(busy)
+  const meta = metaParts(task, data, m)
   return (
-    <Row gap="xs" align="center">
-      <IconButton
-        icon="check"
-        label={m.complete}
-        tooltip={m.complete}
-        size="xs"
-        disabled={disabled}
-        onPress={onComplete}
-      />
-      <Box grow>
-        <Stack gap="none" align="stretch">
-          <Button variant="ghost" size="sm" onPress={onSelect}>
-            {task.content}
-          </Button>
-          <Text size="xs" muted truncate>
-            {meta}
-          </Text>
-        </Stack>
+    <Row gap="none" align="start">
+      <Box paddingX="sm" paddingY="xs" shrink={false}>
+        <IconButton
+          icon="check"
+          label={m.complete}
+          tooltip={m.complete}
+          size="xs"
+          disabled={disabled}
+          onPress={() => void completeTask(task)}
+        />
       </Box>
-      <Badge tone={priorityTone(task.priority)}>{priorityName(task.priority)}</Badge>
-      {subtasks > 0 ? <Badge tone="neutral">{String(subtasks)}</Badge> : null}
+      <Box grow>
+        <List>
+          <ListItem onPress={() => selectTask(task, data.timeZone)} disabled={disabled}>
+            <Text>{task.content}</Text>
+            {meta.length === 0 ? null : (
+              <Text size="xs" muted>
+                {meta}
+              </Text>
+            )}
+          </ListItem>
+        </List>
+      </Box>
     </Row>
   )
 }
@@ -956,12 +955,111 @@ function priorityTone(value: number): 'danger' | 'warning' | 'accent' | 'neutral
   return value >= 4 ? 'danger' : value === 3 ? 'warning' : value === 2 ? 'accent' : 'neutral'
 }
 
+/**
+ * The line under a title: project, due date, time, labels, a priority above the ordinary, and
+ * subtasks, separated by middle dots. An overdue date and the priority are coloured.
+ */
+function metaParts(task: TodoistTask, data: ViewData, m: Messages): OrcaNode[] {
+  const project = data.projects.get(task.projectId)
+  const dayKey = dueDayKey(task.due, data.timeZone)
+  const due =
+    dayKey === null
+      ? task.due?.string ?? null
+      : dayLabel(m, dayKey, data.todayKey, env.locale, (key, locale) => formatDay(key, locale))
+  const time = dayKey === null ? null : formatTime(task.due?.datetime ?? null, env.locale, data.timeZone)
+  const overdue = dayKey !== null && dayKey < data.todayKey
+  const subtasks = data.counts.get(task.id) ?? 0
+  const parts: OrcaNode[] = []
+  const add = (part: OrcaNode): void => {
+    if (parts.length > 0) {
+      parts.push(' · ')
+    }
+    parts.push(part)
+  }
+  if (project !== undefined) {
+    add(project.name)
+  }
+  if (due !== null) {
+    add(overdue ? <Text tone="danger">{due}</Text> : due)
+  }
+  if (time !== null) {
+    add(time)
+  }
+  for (const item of task.labels) {
+    add(`@${item}`)
+  }
+  if (task.priority >= 2) {
+    add(
+      <Text tone={priorityTone(task.priority)} weight="medium">
+        {priorityName(task.priority)}
+      </Text>
+    )
+  }
+  if (subtasks > 0) {
+    add(m.subtaskCount(subtasks))
+  }
+  return parts
+}
+
+/** Nodes a row takes in Orca's tree: eight for the row and its title, then the line under it. */
+function rowCost(task: TodoistTask, data: ViewData, m: Messages): number {
+  const meta = metaParts(task, data, m).length
+  return 8 + (meta === 0 ? 0 : meta + 1)
+}
+
+/** What one view drew, and how many rows it left out for Orca's tree limit; see ROW_BUDGET. */
+type TaskPage = { tasks: TodoistTask[]; hidden: number }
+
+/** Hands out the rows of each group in turn until the view's node budget runs out. */
+function pagerOf(data: ViewData, m: Messages): { page: TaskPage; take: (tasks: readonly TodoistTask[]) => TodoistTask[] } {
+  let left = ROW_BUDGET
+  const page: TaskPage = { tasks: [], hidden: 0 }
+  const take = (tasks: readonly TodoistTask[]): TodoistTask[] => {
+    const fitting: TodoistTask[] = []
+    for (const task of tasks) {
+      const cost = rowCost(task, data, m)
+      if (left < cost) {
+        break
+      }
+      left -= cost
+      fitting.push(task)
+    }
+    page.hidden += tasks.length - fitting.length
+    page.tasks.push(...fitting)
+    return fitting
+  }
+  return { page, take }
+}
+
+/** Says how many rows a view left out; nothing when it drew them all. */
+function LeftOut({ page, m }: { page: TaskPage; m: Messages }) {
+  if (page.hidden === 0) {
+    return null
+  }
+  return (
+    <Text size="xs" muted>
+      {m.showingFirst(page.tasks.length, page.tasks.length + page.hidden)}
+    </Text>
+  )
+}
+
 function CalendarView({ data, m }: { data: ViewData; m: Messages }) {
   const first = monthOf(data.todayKey)
   const persisted = read(month)
-  const active = /^\d{4}-(0[1-9]|1[0-2])$/.test(persisted) ? persisted : first
-  const selectedDay = /^\d{4}-\d{2}-\d{2}$/.test(read(day)) ? read(day) : data.todayKey
-  const byDay = tasksByDay(sortTasks(data.tasks, sortOf(read(sort)), data.timeZone, data.projects), data.timeZone)
+  const active = MONTH_KEY.test(persisted) ? persisted : first
+  const selectedDay = DAY_KEY.test(read(day)) ? read(day) : data.todayKey
+  const byDay = tasksByDay(
+    sortTasks(data.tasks, sortOf(read(sort)), data.timeZone, data.projects),
+    data.timeZone
+  )
+  const pager = pagerOf(data, m)
+  const listed = pager.take(byDay.get(selectedDay) ?? [])
+  // Another month opens on today, or on its first day that has a task.
+  const showMonth = (target: string): void => {
+    set(month, target)
+    const withTasks = [...byDay.keys()].filter((key) => monthOf(key) === target).sort()[0]
+    set(day, target === first ? data.todayKey : (withTasks ?? `${target}-01`))
+  }
   return (
     <Stack gap="xs">
       <Row justify="between" align="center">
@@ -970,7 +1068,7 @@ function CalendarView({ data, m }: { data: ViewData; m: Messages }) {
             size="xs"
             variant="ghost"
             tooltip={m.previousMonth}
-            onPress={() => set(month, addMonths(active, -1))}
+            onPress={() => showMonth(addMonths(active, -1))}
           >
             ‹
           </Button>
@@ -979,88 +1077,114 @@ function CalendarView({ data, m }: { data: ViewData; m: Messages }) {
             size="xs"
             variant="ghost"
             tooltip={m.nextMonth}
-            onPress={() => set(month, addMonths(active, 1))}
+            onPress={() => showMonth(addMonths(active, 1))}
           >
             ›
           </Button>
         </Row>
-        <Button
-          size="xs"
-          variant="outline"
-          onPress={() => {
-            set(month, first)
-            set(day, data.todayKey)
-          }}
-        >
+        <Button size="xs" variant="outline" onPress={() => showMonth(first)}>
           {m.calendarToday}
         </Button>
       </Row>
-      <Weekdays />
-      <Stack gap="xs">
+      <Box border radius="md">
+        <Weekdays />
         {calendarGrid(active, weekStartsOf(), data.todayKey).map((week, index) => (
-          <Row gap="xs" key={`${active}-${index}`}>
-            {week.map((cell) => (
-              <Box grow key={cell.key}>
-                <Stack gap="none" align="center">
-                  <Button
-                    variant={cell.today ? 'outline' : 'ghost'}
-                    size="xs"
-                    onPress={() => set(day, cell.key)}
-                  >
-                    {String(cell.day)}
-                  </Button>
-                  <Text size="xs" muted={!cell.inMonth}>
-                    {(byDay.get(cell.key) ?? []).length > 0
-                      ? String((byDay.get(cell.key) ?? []).length)
-                      : ' '}
-                  </Text>
-                </Stack>
-              </Box>
-            ))}
-          </Row>
+          <Stack gap="none" key={`${active}-${index}`}>
+            <Separator />
+            <Box direction="row" gap="none" align="stretch">
+              {week.map((cell) => (
+                <DayCell
+                  key={cell.key}
+                  cell={cell}
+                  count={byDay.get(cell.key)?.length ?? 0}
+                  selected={cell.key === selectedDay}
+                  todayKey={data.todayKey}
+                  onPress={() => set(day, cell.key)}
+                />
+              ))}
+            </Box>
+          </Stack>
         ))}
-      </Stack>
-      <Separator />
+      </Box>
       <Text size="xs" weight="semibold">
         {dayLabel(m, selectedDay, data.todayKey, env.locale, (key, locale) =>
           formatDay(key, locale, { weekday: true })
         )}
       </Text>
-      {(byDay.get(selectedDay) ?? []).length === 0 ? (
+      {listed.length === 0 ? (
         <Text size="xs" muted>
-          {m.noTasks}
+          {m.noTasksOnDay}
         </Text>
       ) : (
-        <Stack gap="xs">
-          {(byDay.get(selectedDay) ?? []).map((task) => (
-            <TaskRow
-              key={task.id}
-              task={task}
-              data={data}
-              m={m}
-              disabled={read(closing).has(task.id) || read(busy)}
-              onSelect={() => selectTask(task, data.timeZone)}
-              onComplete={() => void completeTask(task)}
-            />
-          ))}
-        </Stack>
+        <Rows tasks={listed} data={data} m={m} />
       )}
+      <LeftOut page={pager.page} m={m} />
     </Stack>
   )
 }
 
+/**
+ * One day of the month. Every cell starts from a zero width and takes an equal share of the row,
+ * so the seven columns line up week after week; a cell sized by its content would not. A day with
+ * tasks shows their number in a pill, red-tinted when the day is past.
+ */
+function DayCell({
+  cell,
+  count,
+  selected,
+  todayKey,
+  onPress
+}: {
+  cell: CalendarCell
+  count: number
+  selected: boolean
+  todayKey: string
+  onPress: () => void
+}) {
+  const tint = cell.key < todayKey ? 'danger' : 'accent'
+  return (
+    <Box grow width={0} gap="xs" align="center" paddingY="xs" radius="sm" background={selected ? 'muted' : undefined}>
+      {cell.today ? (
+        <Button size="xs" variant="solid" tone="accent" onPress={onPress}>
+          {String(cell.day)}
+        </Button>
+      ) : cell.inMonth ? (
+        <Button size="xs" variant={selected ? 'outline' : 'ghost'} onPress={onPress}>
+          {String(cell.day)}
+        </Button>
+      ) : (
+        <Box height={24} align="center" justify="center">
+          <Text size="xs" muted>
+            {String(cell.day)}
+          </Text>
+        </Box>
+      )}
+      {count === 0 ? (
+        <Box height={16} />
+      ) : (
+        <Box radius="full" paddingX="xs" background={tint}>
+          <Text size="xs" weight="medium" tone={tint}>
+            {String(count)}
+          </Text>
+        </Box>
+      )}
+    </Box>
+  )
+}
+
+/** The same seven equal columns as the days, so each name sits over its column. */
 function Weekdays() {
   const names = weekdayNames(env.locale, weekStartsOf())
   return (
-    <Row gap="xs">
-      {names.map((name) => (
-        <Box grow key={name}>
+    <Box direction="row" gap="none">
+      {names.map((name, index) => (
+        <Box key={index} grow width={0} align="center" paddingY="xs">
           <Text size="xs" muted>
             {name}
           </Text>
         </Box>
       ))}
-    </Row>
+    </Box>
   )
 }
 
@@ -1090,6 +1214,7 @@ function BoardView({ data, m }: { data: ViewData; m: Messages }) {
   if (columns.length === 0) {
     return <EmptyState icon="search" title={m.noMatch} description={m.noMatchBody} />
   }
+  const pager = pagerOf(data, m)
   return (
     <Stack gap="xs">
       {columns.map((column) => (
@@ -1099,21 +1224,10 @@ function BoardView({ data, m }: { data: ViewData; m: Messages }) {
           description={String(column.tasks.length)}
           defaultOpen
         >
-          <Stack gap="xs">
-            {column.tasks.map((task) => (
-              <TaskRow
-                key={task.id}
-                task={task}
-                data={data}
-                m={m}
-                disabled={read(closing).has(task.id) || read(busy)}
-                onSelect={() => selectTask(task, data.timeZone)}
-                onComplete={() => void completeTask(task)}
-              />
-            ))}
-          </Stack>
+          <Rows tasks={pager.take(column.tasks)} data={data} m={m} />
         </Collapsible>
       ))}
+      <LeftOut page={pager.page} m={m} />
     </Stack>
   )
 }
@@ -1231,8 +1345,8 @@ function TaskEditor({
         disabled={disabled}
         onChange={(value) => patchForm({ sectionId: value === 'none' ? '' : value })}
       />
-      <Row gap="xs" align="center">
-        <Box grow>
+      <Row gap="xs" align="center" wrap>
+        <Box grow width={0} minWidth={132}>
           <Input
             label={m.detailDue}
             placeholder="YYYY-MM-DD"
@@ -1242,7 +1356,7 @@ function TaskEditor({
             onChange={(value) => patchForm({ dueDate: value })}
           />
         </Box>
-        <Box grow>
+        <Box grow width={0} minWidth={132}>
           <Input
             label={m.detailTime}
             placeholder="HH:mm"
