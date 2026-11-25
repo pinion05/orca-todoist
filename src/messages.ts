@@ -43,6 +43,7 @@ export type Messages = {
   close: string
   search: string
   searchPlaceholder: string
+  searchHint: string
   filters: string
   dateBuckets: string
   clearFilters: string
@@ -51,6 +52,8 @@ export type Messages = {
   noTasksBody: string
   noMatch: string
   noMatchBody: string
+  noTasksOnDay: string
+  showingFirst: (shown: number, total: number) => string
   noProjectTasks: string
   views: Record<'list' | 'calendar' | 'board', string>
   buckets: Record<DueBucket, string>
@@ -142,7 +145,8 @@ const en: Messages = {
   titleRequired: 'A task needs a title.',
   close: 'Close',
   search: 'Search',
-  searchPlaceholder: 'Search tasks · @label · #project · p1',
+  searchPlaceholder: 'Search tasks',
+  searchHint: 'The search box understands @label, #project and p1–p4.',
   filters: 'Filters',
   dateBuckets: 'Due dates',
   clearFilters: 'Clear',
@@ -151,6 +155,9 @@ const en: Messages = {
   noTasksBody: 'Everything in Todoist is done. Add a task there and it shows up here.',
   noMatch: 'Nothing matches',
   noMatchBody: 'Loosen a filter or clear the search to see more tasks.',
+  noTasksOnDay: 'No tasks due this day.',
+  showingFirst: (shown, total) =>
+    `Showing ${shown} of ${total} tasks. Narrow the filters to see the rest.`,
   noProjectTasks: 'No tasks in this project.',
   views: { list: 'List', calendar: 'Calendar', board: 'Board' },
   buckets: {
@@ -268,7 +275,8 @@ const ko: Messages = {
   titleRequired: '할 일 제목이 필요합니다.',
   close: '닫기',
   search: '검색',
-  searchPlaceholder: '할 일 검색 · @라벨 · #프로젝트 · p1',
+  searchPlaceholder: '할 일 검색',
+  searchHint: '검색창에는 @라벨, #프로젝트, p1–p4를 쓸 수 있습니다.',
   filters: '필터',
   dateBuckets: '날짜',
   clearFilters: '지우기',
@@ -277,6 +285,9 @@ const ko: Messages = {
   noTasksBody: 'Todoist의 할 일을 모두 마쳤습니다. Todoist에서 추가하면 여기에 나타납니다.',
   noMatch: '조건에 맞는 할 일이 없습니다',
   noMatchBody: '필터를 풀거나 검색어를 지우면 더 많이 보입니다.',
+  noTasksOnDay: '이날 마감인 할 일이 없습니다.',
+  showingFirst: (shown, total) =>
+    `${total}개 중 ${shown}개를 보여 줍니다. 나머지는 필터를 좁혀 보세요.`,
   noProjectTasks: '이 프로젝트에 할 일이 없습니다.',
   views: { list: '목록', calendar: '캘린더', board: '보드' },
   buckets: {

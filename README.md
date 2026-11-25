@@ -10,9 +10,11 @@ There is one surface: the **Todoist** panel. No editor tab, no `+` menu entry.
 
 - **List** — grouped into Overdue / Today / Tomorrow / Next 7 days / Later / No date, with
   collapsible groups. Sort by due date, priority, project, recently added, name or Todoist's
-  manual order.
-- **Calendar** — a month grid with a task count per day, month navigation, a Today button and
-  the selected day's tasks. The week can start on Monday or Sunday (Settings → Todoist).
+  manual order. Titles and their details wrap, so a narrow sidebar never cuts them off.
+- **Calendar** — a month grid in seven equal columns. Every day with tasks shows their number,
+  red when the day is past, so nothing is hidden behind a click; choosing a day lists its tasks.
+  Month navigation moves the chosen day into that month. The week can start on Monday or Sunday
+  (Settings → Todoist).
 - **Board** — one section per project, with the same filters and sort.
 - **Filters** — project, label, priority, date, "hide subtasks" and a search box that
   understands `@label`, `#project` and `p1`…`p4` as well as plain words. The chosen view and
@@ -78,6 +80,9 @@ set.
   and a failed read still shows the previous tasks with a warning.
 - The cache is read again when it is older than **Refresh every** (5 minutes by default, 1–60 in
   Settings), on the refresh button, and when the panel reopens.
+- Orca refuses a panel tree of more than 5000 nodes and would then draw nothing. A view with more
+  tasks than that draws as many as fit and says how many it left out; narrow the filters to reach
+  the rest.
 - No telemetry, no analytics, no third-party services.
 
 ## Orca notes
