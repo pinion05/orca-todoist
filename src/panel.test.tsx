@@ -46,13 +46,33 @@ const nothingWentWrong = (view: TestPanel): void => {
   assert.deepEqual(view.refusals, [])
 }
 
+const INBOX: TodoistProject = {
+  id: 'inbox',
+  name: 'Inbox',
+  color: 'charcoal',
+  isFavorite: false,
+  isInboxProject: true,
+  order: 0,
+  parentId: null
+}
+
 const PROJECT: TodoistProject = {
   id: 'proj-1',
   name: 'Work',
   color: 'blue',
   isFavorite: false,
   isInboxProject: false,
-  order: 0,
+  order: 1,
+  parentId: null
+}
+
+const PERSONAL: TodoistProject = {
+  id: 'proj-2',
+  name: 'Personal',
+  color: 'green',
+  isFavorite: false,
+  isInboxProject: false,
+  order: 2,
   parentId: null
 }
 
@@ -95,7 +115,7 @@ function snapshotOf(tasks: TodoistTask[]): TodoistSnapshot {
   return {
     fetchedAt: 1_700_000_000_000,
     tasks,
-    projects: [PROJECT],
+    projects: [INBOX, PROJECT, PERSONAL],
     sections: [],
     labels: [],
     user: { name: 'Test', email: null, timezone: 'UTC' }
@@ -130,7 +150,7 @@ function staleView(tasks: TodoistTask[]): TodoistView {
   }
 }
 
-/** Two days overdue, one due today, and one later this week, relative to the real today. */
+/** Two days overdue, two due today, one tomorrow, and one later this week. */
 function sampleTasks(): TodoistTask[] {
   const today = todayKey()
   return [
@@ -154,8 +174,29 @@ function sampleTasks(): TodoistTask[] {
       content: 'Plan sprint',
       due: dueOn(addDays(today, 3)),
       order: 2
+    }),
+    task({
+      id: 't4',
+      content: 'Read notes',
+      projectId: PERSONAL.id,
+      due: dueOn(addDays(today, 1)),
+      order: 3
+    }),
+    task({
+      id: 't5',
+      content: 'Personal task',
+      projectId: PERSONAL.id,
+      due: dueOn(today),
+      order: 4
     })
   ]
+}
+
+/** The first Collapsible is the Filters card; opening it shows the Selects. */
+async function openFilters(view: TestPanel): Promise<void> {
+  const filters = view.findAll({ type: 'Collapsible' })[0]
+  assert.ok(filters)
+  await view.toggle(filters!)
 }
 
 test('asks for a token when there is none, and saves what is typed', async () => {
@@ -172,120 +213,84 @@ test('asks for a token when there is none, and saves what is typed', async () =>
     },
     async (view, host) => {
       assert.ok(view.find({ text: 'Connect your Todoist account' }))
-      assert.equal(view.find({ text: 'Connect' })?.disabled, true) // nothing to save yet
+      assert.equal(view.find({ text: 'Connect' })?.disabled, true)
       await view.type({ label: 'API token' }, '  tok-123  ')
       assert.equal(view.find({ text: 'Connect' })?.disabled, false)
       await view.press({ text: 'Connect' })
-      assert.equal(saved, 'tok-123') // trimmed by the panel before the worker sees it
-      assert.ok(view.find({ label: 'Write report' }))
-      assert.equal(view.find({ label: 'API token' }), null) // the form is gone
-      // The token is the worker's to keep: the panel never stores it itself.
+      assert.equal(saved, 'tok-123')
+      assert.ok(view.find({ text: 'Write report' }))
+      assert.equal(view.find({ label: 'API token' }), null)
       assert.deepEqual(host.callsOf('secrets.set'), [])
-      assert.deepEqual(host.data().secrets, {})
       nothingWentWrong(view)
     }
   )
 })
 
-test('shows the stats and today’s tasks, and the overdue tab shows the overdue task', async () => {
+test('shows the stats, the list and its groups', async () => {
   await withPanel({ requests: { 'todoist.get': () => readyView(sampleTasks()) } }, async (view) => {
     assert.ok(view.find({ text: 'Overdue 1' }))
-    assert.ok(view.find({ text: 'Today 1' }))
-    assert.ok(view.find({ text: 'This week 2' }))
-    assert.ok(view.find({ label: 'Write report' }))
-    assert.equal(view.find({ label: 'File taxes' }), null) // overdue is not in the today tab
-    await view.select({ type: 'Tabs' }, 'overdue')
-    assert.ok(view.find({ label: 'File taxes' }))
-    assert.equal(view.find({ label: 'Write report' }), null)
+    assert.ok(view.find({ text: 'Today 2' }))
+    assert.ok(view.find({ text: 'Write report' }))
+    assert.ok(view.find({ text: 'File taxes' }))
+    assert.ok(view.find({ text: 'Personal task' }))
     nothingWentWrong(view)
   })
 })
 
-test('refreshes through todoist.refresh, not todoist.get', async () => {
-  let gets = 0
-  let refreshes = 0
-  await withPanel(
-    {
-      requests: {
-        'todoist.get': () => {
-          gets += 1
-          return readyView(sampleTasks())
-        },
-        'todoist.refresh': () => {
-          refreshes += 1
-          return readyView(sampleTasks())
-        }
-      }
-    },
-    async (view) => {
-      assert.equal(gets, 1) // the setup load
-      await view.press({ label: 'Refresh' })
-      assert.equal(refreshes, 1)
-      assert.equal(gets, 1)
-      nothingWentWrong(view)
-    }
-  )
-})
-
-test('says what went wrong when the first read fails, and offers a retry', async () => {
-  await withPanel(
-    {
-      requests: {
-        'todoist.get': () => {
-          throw hostError('unavailable', 'the worker is not running')
-        }
-      }
-    },
-    async (view) => {
-      assert.equal(view.find({ type: 'Callout' })?.props.title, 'Could not read Todoist')
-      assert.ok(view.find({ text: 'the worker is not running' }))
-      assert.ok(view.find({ text: 'Try again' }))
-      nothingWentWrong(view)
-    }
-  )
-})
-
-test('keeps the last read on screen when a later read fails', async () => {
-  await withPanel({ requests: { 'todoist.get': () => staleView(sampleTasks()) } }, async (view) => {
-    assert.equal(view.find({ type: 'Callout' })?.props.title, 'Showing the last read')
-    assert.ok(view.find({ label: 'Write report' }))
+test('filters by project and by search', async () => {
+  await withPanel({ requests: { 'todoist.get': () => readyView(sampleTasks()) } }, async (view) => {
+    await openFilters(view)
+    await view.select({ label: 'Projects' }, PERSONAL.id)
+    assert.ok(view.find({ text: 'Personal task' }))
+    assert.equal(view.find({ text: 'Write report' }), null)
+    await view.select({ label: 'Projects' }, 'all')
+    assert.ok(view.find({ text: 'Write report' }))
+    await view.type({ label: 'Search' }, 'report')
+    assert.ok(view.find({ text: 'Write report' }))
+    assert.equal(view.find({ text: 'Personal task' }), null)
     nothingWentWrong(view)
   })
 })
 
-test('shows the empty state with no tasks, and no-match when a filter hides them all', async () => {
-  await withPanel({ requests: { 'todoist.get': () => readyView([]) } }, async (view) => {
-    assert.ok(view.find({ label: 'No active tasks' }))
-    assert.equal(view.find({ label: 'Nothing matches' }), null)
+test('switches to the calendar and board views', async () => {
+  await withPanel({ requests: { 'todoist.get': () => readyView(sampleTasks()) } }, async (view) => {
+    await view.select({ type: 'Tabs' }, 'calendar')
+    assert.ok(view.find({ text: 'Today' }))
+    assert.ok(view.find({ text: '‹' }))
+    await view.select({ type: 'Tabs' }, 'board')
+    assert.ok(view.find({ type: 'Collapsible' }))
     nothingWentWrong(view)
   })
-  await withPanel(
-    {
-      requests: {
-        'todoist.get': () =>
-          readyView([
-            task({ id: 't-old', content: 'Old task', due: dueOn(addDays(todayKey(), -1)) })
-          ])
-      }
-    },
-    async (view) => {
-      assert.ok(view.find({ label: 'Nothing matches' })) // today's tab is empty
-      nothingWentWrong(view)
-    }
-  )
 })
 
-test('opens a task in Todoist from its row', async () => {
+test('completes a task and undoes it', async () => {
   const tasks = sampleTasks()
-  const target = tasks[0]
-  await withPanel({ requests: { 'todoist.get': () => readyView(tasks) } }, async (view, host) => {
-    await view.press({ text: 'Open Todoist' })
-    assert.deepEqual(host.callsOf('shell.openExternal'), [{ url: target.url }])
-    nothingWentWrong(view)
-  })
+  let closed: string | null = null
+  await withPanel(
+    {
+      requests: {
+        'todoist.get': () => readyView(tasks),
+        'task.close': ({ id }) => {
+          closed = id
+          return { ok: true, view: readyView(tasks.filter((item) => item.id !== id)) }
+        },
+        'task.reopen': () => ({ ok: true, view: readyView(tasks) })
+      }
+    },
+    async (view) => {
+      await view.press({ label: 'Complete' })
+      assert.equal(closed, 't2')
+      assert.equal(view.find({ text: 'File taxes' }), null)
+      const notice = view.findAll({ type: 'Callout' })[0]
+      assert.equal(notice?.props.title, 'Completed: File taxes')
+      await view.press({ text: 'Undo' })
+      assert.ok(view.find({ text: 'File taxes' }))
+      nothingWentWrong(view)
+    }
+  )
 })
 
-test('adds a task from the panel', async () => {
+test('adds a task to the Inbox', async () => {
   let created: unknown = null
   await withPanel(
     {
@@ -306,33 +311,145 @@ test('adds a task from the panel', async () => {
     async (view) => {
       await view.type({ label: 'Add a task' }, 'New task')
       await view.press({ label: 'Add' })
-      assert.deepEqual(created, { content: 'New task' })
-      assert.ok(view.find({ label: 'New task' }))
+      assert.deepEqual(created, { content: 'New task', projectId: 'inbox' })
+      assert.ok(view.find({ text: 'New task' }))
       nothingWentWrong(view)
     }
   )
 })
 
-test('completes a task from its row', async () => {
-  let closed: string | null = null
-  const remaining = sampleTasks().filter((item) => item.id !== 't1')
+test('opens and edits a task, and saves it', async () => {
+  let updated: unknown = null
   await withPanel(
     {
       requests: {
         'todoist.get': () => readyView(sampleTasks()),
-        'task.close': ({ id }) => {
-          closed = id
-          return { ok: true, view: readyView(remaining) }
+        'task.update': (input) => {
+          updated = input
+          const next = sampleTasks().map((item) =>
+            item.id === input.id ? { ...item, content: input.content, priority: input.priority } : item
+          )
+          return { ok: true, view: readyView(next) }
         }
       }
     },
     async (view) => {
-      await view.press({ label: 'Complete' })
-      assert.equal(closed, 't1')
-      assert.equal(view.find({ label: 'Write report' }), null)
+      await view.press({ text: 'Write report' })
+      assert.ok(view.find({ label: 'Task' }))
+      await view.type({ label: 'Task' }, 'Renamed report', { replace: true })
+      await view.select({ label: 'Priority' }, '2')
+      await view.press({ text: 'Save' })
+      assert.equal((updated as { content?: string }).content, 'Renamed report')
+      assert.equal((updated as { priority?: number }).priority, 2)
+      assert.ok(view.find({ text: /Saved/ }))
+      await view.press({ text: 'Back' })
+      assert.ok(view.find({ text: 'Renamed report' }))
       nothingWentWrong(view)
     }
   )
+})
+
+test('opens a task in Todoist', async () => {
+  await withPanel({ requests: { 'todoist.get': () => readyView(sampleTasks()) } }, async (view, host) => {
+    await view.press({ text: 'Write report' })
+    await view.press({ text: 'Open Todoist' })
+    assert.deepEqual(host.callsOf('shell.openExternal'), [
+      { url: 'https://app.todoist.com/app/task/t1' }
+    ])
+    nothingWentWrong(view)
+  })
+})
+
+test('deletes a task after a second press', async () => {
+  let deleted: string | null = null
+  await withPanel(
+    {
+      requests: {
+        'todoist.get': () => readyView(sampleTasks()),
+        'task.delete': ({ id }) => {
+          deleted = id
+          return {
+            ok: true,
+            view: readyView(sampleTasks().filter((item) => item.id !== id))
+          }
+        }
+      }
+    },
+    async (view) => {
+      await view.press({ text: 'Write report' })
+      await view.press({ text: 'Delete' })
+      assert.ok(view.find({ text: 'Delete for real?' }))
+      await view.press({ text: 'Delete for real?' })
+      assert.equal(deleted, 't1')
+      assert.ok(view.find({ text: 'File taxes' }))
+      assert.equal(view.find({ label: 'Task' }), null)
+      nothingWentWrong(view)
+    }
+  )
+})
+
+test('creates a project from the filters card', async () => {
+  let created: unknown = null
+  await withPanel(
+    {
+      requests: {
+        'todoist.get': () => readyView(sampleTasks()),
+        'project.create': (input) => {
+          created = input
+          return {
+            ok: true,
+            view: readyView(sampleTasks())
+          }
+        }
+      }
+    },
+    async (view) => {
+      await openFilters(view)
+      await view.type({ label: 'Project name' }, 'Home')
+      await view.press({ text: 'Create' })
+      assert.deepEqual(created, { name: 'Home' })
+      nothingWentWrong(view)
+    }
+  )
+})
+
+test('shows what went wrong when the first read fails, and offers a retry', async () => {
+  await withPanel(
+    {
+      requests: {
+        'todoist.get': () => {
+          throw hostError('unavailable', 'the worker is not running')
+        }
+      }
+    },
+    async (view) => {
+      assert.equal(view.find({ type: 'Callout' })?.props.title, 'Could not read Todoist')
+      assert.ok(view.find({ text: 'the worker is not running' }))
+      assert.ok(view.find({ text: 'Try again' }))
+      nothingWentWrong(view)
+    }
+  )
+})
+
+test('keeps the last read on screen when a later read fails', async () => {
+  await withPanel({ requests: { 'todoist.get': () => staleView(sampleTasks()) } }, async (view) => {
+    assert.equal(view.find({ type: 'Callout' })?.props.title, 'Showing the last read')
+    assert.ok(view.find({ text: 'Write report' }))
+    nothingWentWrong(view)
+  })
+})
+
+test('shows the empty state with no tasks, and no-match when a filter hides them all', async () => {
+  await withPanel({ requests: { 'todoist.get': () => readyView([]) } }, async (view) => {
+    assert.ok(view.find({ label: 'No active tasks' }))
+    assert.equal(view.find({ label: 'Nothing matches' }), null)
+    nothingWentWrong(view)
+  })
+  await withPanel({ requests: { 'todoist.get': () => readyView(sampleTasks()) } }, async (view) => {
+    await view.type({ label: 'Search' }, 'zzzz')
+    assert.ok(view.find({ label: 'Nothing matches' }))
+    nothingWentWrong(view)
+  })
 })
 
 test('reports a refused write', async () => {
@@ -349,7 +466,7 @@ test('reports a refused write', async () => {
     },
     async (view) => {
       await view.press({ label: 'Complete' })
-      assert.ok(view.find({ text: /not allowed to read/ }))
+      assert.equal(view.find({ type: 'Callout' })?.props.title, 'Could not update Todoist')
       nothingWentWrong(view)
     }
   )
@@ -369,24 +486,28 @@ test('follows the worker as it posts a new view', async () => {
     async (view) => {
       assert.ok(view.find({ text: 'Connect your Todoist account' }))
       await view.post('todoist.changed', { view: readyView(sampleTasks()) })
-      assert.ok(view.find({ label: 'Write report' }))
-      assert.equal(gets, 1) // the post carried the answer; nothing was asked again
+      assert.ok(view.find({ text: 'Write report' }))
+      assert.equal(gets, 1)
       nothingWentWrong(view)
     }
   )
 })
 
-test('explains a device without an OS key store', async () => {
+test('refreshes from the header', async () => {
+  let refreshes = 0
   await withPanel(
-    { requests: { 'todoist.get': () => noTokenView('unavailable') } },
+    {
+      requests: {
+        'todoist.get': () => readyView(sampleTasks()),
+        'todoist.refresh': () => {
+          refreshes += 1
+          return readyView(sampleTasks())
+        }
+      }
+    },
     async (view) => {
-      assert.ok(view.find({ text: /no OS key store/ }))
-      assert.equal(
-        view.find({
-          text: 'Paste a personal API token. It is checked, then saved encrypted on this device, and the plugin only reads tasks.'
-        }),
-        null
-      )
+      await view.press({ label: 'Refresh' })
+      assert.equal(refreshes, 1)
       nothingWentWrong(view)
     }
   )

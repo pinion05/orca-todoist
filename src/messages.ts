@@ -21,6 +21,7 @@ export type Messages = {
   updated: string
   retry: string
   errorTitle: string
+  writeFailed: string
   staleTitle: string
   readOnlyFile: string
   addTask: string
@@ -59,6 +60,13 @@ export type Messages = {
   labels: string
   priorities: string
   allProjects: string
+  allLabels: string
+  allPriorities: string
+  allDates: string
+  back: string
+  invalidDate: string
+  invalidTime: string
+  detailTime: string
   hideSubtasks: string
   weekStartsOn: string
   today: string
@@ -113,6 +121,7 @@ const en: Messages = {
   updated: 'Updated',
   retry: 'Try again',
   errorTitle: 'Could not read Todoist',
+  writeFailed: 'Could not update Todoist',
   staleTitle: 'Showing the last read',
   readOnlyFile: 'This file is read-only, so view changes are not saved.',
   addTask: 'Add a task',
@@ -165,6 +174,13 @@ const en: Messages = {
   labels: 'Labels',
   priorities: 'Priority',
   allProjects: 'All projects',
+  allLabels: 'All labels',
+  allPriorities: 'All priorities',
+  allDates: 'All dates',
+  back: 'Back',
+  invalidDate: 'Use YYYY-MM-DD.',
+  invalidTime: 'Use HH:mm.',
+  detailTime: 'Time',
   hideSubtasks: 'Hide subtasks',
   weekStartsOn: 'Week starts on',
   today: 'Today',
@@ -231,6 +247,7 @@ const ko: Messages = {
   updated: '업데이트',
   retry: '다시 시도',
   errorTitle: 'Todoist를 읽지 못했습니다',
+  writeFailed: 'Todoist를 변경하지 못했습니다',
   staleTitle: '마지막으로 읽은 내용',
   readOnlyFile: '이 파일은 읽기 전용이라 보기 설정이 저장되지 않습니다.',
   addTask: '할 일 추가',
@@ -283,6 +300,13 @@ const ko: Messages = {
   labels: '라벨',
   priorities: '우선순위',
   allProjects: '모든 프로젝트',
+  allLabels: '모든 라벨',
+  allPriorities: '모든 우선순위',
+  allDates: '모든 날짜',
+  back: '뒤로',
+  invalidDate: 'YYYY-MM-DD 형식으로 입력하세요.',
+  invalidTime: 'HH:mm 형식으로 입력하세요.',
+  detailTime: '시간',
   hideSubtasks: '하위 할 일 숨기기',
   weekStartsOn: '한 주 시작',
   today: '오늘',

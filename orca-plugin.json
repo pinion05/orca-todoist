@@ -2,8 +2,8 @@
   "manifestVersion": 2,
   "id": "todoist-viewer",
   "name": "Todoist",
-  "version": "0.2.0",
-  "description": "Todoist in Orca: add, edit, complete and filter tasks in a sidebar panel and a full list, calendar and board page.",
+  "version": "0.3.0",
+  "description": "Todoist in Orca's sidebar: add, edit, complete and filter tasks in list, calendar and board views.",
   "author": {
     "name": "pinion05"
   },
@@ -25,24 +25,6 @@
         "ui": "components"
       }
     ],
-    "customEditors": [
-      {
-        "id": "board",
-        "title": "Todoist",
-        "extensions": [
-          ".todoist"
-        ],
-        "entry": "src/page.html"
-      }
-    ],
-    "newFiles": [
-      {
-        "id": "view",
-        "title": "New Todoist view",
-        "extension": ".todoist",
-        "template": "templates/new-view.todoist"
-      }
-    ],
     "settings": [
       {
         "key": "apiToken",
@@ -55,7 +37,7 @@
       {
         "key": "refreshMinutes",
         "title": "Refresh every",
-        "description": "Minutes between reads of your Todoist tasks while a panel or page is open.",
+        "description": "Minutes between reads of your Todoist tasks while the panel is open.",
         "type": "integer",
         "default": 5,
         "minimum": 1,
@@ -78,32 +60,6 @@
       }
     ]
   },
-  "cover": {
-    "path": "docs/cover.png",
-    "alt": "The Todoist page in Orca: a Korean list of tasks grouped by date, with a quick-add row, a project rail and a task detail panel"
-  },
-  "screenshots": [
-    {
-      "path": "docs/edit.png",
-      "alt": "Editing a task: title, description, project, section, due date and time, priority, labels and deadline",
-      "caption": "Edit a task"
-    },
-    {
-      "path": "docs/calendar.png",
-      "alt": "The calendar view: a six-week month grid with task chips on their due days and a day list",
-      "caption": "Calendar"
-    },
-    {
-      "path": "docs/board.png",
-      "alt": "The board view: one column per project with task cards",
-      "caption": "Board"
-    },
-    {
-      "path": "docs/dark.png",
-      "alt": "The same list in Orca’s dark theme",
-      "caption": "Dark theme"
-    }
-  ],
   "capabilities": [
     {
       "kind": "settings:own"
