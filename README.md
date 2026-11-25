@@ -1,37 +1,69 @@
 # Todoist for Orca
 
-Todoist in Orca's right sidebar: list, calendar and board views, filters, a quick add, and a
-full task editor. Add, edit, complete, reopen, move and delete tasks, and create projects
-without leaving Orca.
+<p align="center">
+  <img src="docs/cover.png" alt="The Todoist panel in Orca's right sidebar: list, calendar and board views" width="880">
+</p>
 
-There is one surface: the **Todoist** panel. No editor tab, no `+` menu entry.
+Todoist in Orca's right sidebar: list, calendar and board views, filters, a quick add, and a full
+task editor. Add, edit, complete, reopen, move and delete tasks, and create projects without
+leaving Orca.
 
-## What it does
+There is one surface, the **Todoist** panel: no editor tab and no `+` menu entry. It keeps its
+filters and month between openings, follows Orca's light or dark theme and its English or Korean
+UI, and stays readable down to the sidebar's smallest width.
 
-- **List** — grouped into Overdue / Today / Tomorrow / Next 7 days / Later / No date, with
-  collapsible groups. Sort by due date, priority, project, recently added, name or Todoist's
-  manual order. Titles and their details wrap, so a narrow sidebar never cuts them off.
-- **Calendar** — a month grid in seven equal columns. Every day with tasks shows their number,
-  red when the day is past, so nothing is hidden behind a click; choosing a day lists its tasks.
-  Month navigation moves the chosen day into that month. The week can start on Monday or Sunday
-  (Settings → Todoist).
-- **Board** — one section per project, with the same filters and sort.
-- **Filters** — project, label, priority, date, "hide subtasks" and a search box that
-  understands `@label`, `#project` and `p1`…`p4` as well as plain words. The chosen view and
-  filters are remembered while the plugin stays enabled.
-- **Add** — the field above the views adds a task with an optional due date; it goes to the
-  project selected in the filters, or to the Inbox.
-- **Edit** — title, description, project, section, due date and time, priority, labels and
-  deadline. Changing the project or section moves the task.
-- **Complete** — the circle beside a task, or Complete in the editor. A completed task offers
-  **Undo**; a completed task can also be reopened.
-- **Delete** — asks once more, then deletes the task and its subtasks.
-- **Projects** — create one from the filters card.
-- English and Korean follow Orca's UI language; the panel follows Orca's light or dark theme.
+## Views
+
+**List** — overdue, today, tomorrow, next 7 days, later and no date, in collapsible groups. Sort by
+due date, priority, project, recently added, name or Todoist's manual order. Titles and their
+details wrap, so a narrow sidebar never cuts them off.
+
+**Calendar** — a month grid in seven equal columns. A day with tasks shows their number, red when
+the day is past, so nothing hides behind a click; choosing a day lists its tasks under the grid.
+Moving to another month chooses a day in it. The week starts on Monday or Sunday (Settings →
+Todoist).
+
+<p align="center">
+  <img src="docs/calendar.png" alt="The calendar: a month grid, a task count on every day that has one, and the chosen day's tasks below" width="380">
+</p>
+
+**Board** — one section per project, with the same filters and sort.
+
+## Add, edit, complete
+
+The field above the views adds a task, with an optional due date, to the project selected in the
+filters or to the Inbox.
+
+<p align="center">
+  <img src="docs/edit.png" alt="The task editor: title, description, project, section, due date and time, priority, labels, and deadline" width="380">
+</p>
+
+A task opens in the editor with its title, description, project, section, due date and time,
+priority, labels and deadline; changing the project or section moves the task. The circle beside a
+task completes it, and a completed task offers **Undo**. Delete asks once more, then removes the
+task and its subtasks. New projects are created from the filters card.
+
+## Filters
+
+Project, label, priority and date, a **hide subtasks** switch, and a search box that understands
+`@label`, `#project` and `p1`…`p4` as well as plain words. The chosen view and filters are
+remembered while the plugin stays enabled.
+
+## Small and dark
+
+<p align="center">
+  <img src="docs/narrow.png" alt="The panel at the sidebar's minimum width, 220px: long titles wrap instead of being cut off" width="240">
+  &nbsp;&nbsp;&nbsp;
+  <img src="docs/dark.png" alt="The same panel in Orca's dark theme, in Korean" width="320">
+</p>
+
+At the sidebar's minimum width the quick add moves its due date under the title, and the editor
+stacks due date and time, so no field is squeezed. Everything else wraps in place.
 
 ## Install
 
-From Orca's **Settings → Plugins → Add plugin**, choose **From a Git URL** and use:
+Needs Orca 1.4.248 or newer. From Orca's **Settings → Plugins → Add plugin**, choose **From a Git
+URL** and use:
 
 ```
 https://github.com/pinion05/orca-todoist
@@ -102,7 +134,8 @@ orca plugin validate .
 ```
 
 Orca transpiles the TypeScript when it loads, so there is no build step. `.orca/` holds the
-generated typings and is ignored by Git.
+generated typings and is ignored by Git. `docs/` holds the screenshots above: 2x captures of the
+panel at 220–340px sidebar widths.
 
 ```
 src/
